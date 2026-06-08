@@ -8,12 +8,19 @@ sdk_version: 4.44.0
 app_file: app.py
 pinned: false
 license: mit
-short_description: Analyse your CV against job descriptions with NLP + Claude AI
+short_description: Upload your CV — auto-search matching jobs and score them with NLP + Claude AI
 ---
 
 # ATS CV Scorer
 
 Portfolio project — ML Engineer track.
+
+Upload your CV (PDF) only: the pipeline extracts your **job title**,
+**skills** and **location**, automatically searches matching job listings via
+the **Adzuna** API, scores each one against your profile with a semantic
+similarity engine, and ranks them. You can then request a **personalized
+Claude AI analysis per listing, on demand** — no AI call is triggered until
+you click "Analyser cette offre".
 
 ## Stack
 
@@ -22,10 +29,27 @@ Portfolio project — ML Engineer track.
 | PDF extraction | pdfplumber |
 | NLP | spaCy `en_core_web_sm` |
 | Semantic scoring | `sentence-transformers` (all-MiniLM-L6-v2) |
-| AI feedback | Anthropic Claude API |
+| AI feedback | Anthropic Claude API (responses in French) |
+| Job search | Adzuna API (`httpx`) |
 | API | FastAPI |
 | UI | Gradio |
 | Deployment | Hugging Face Spaces |
+
+## How it works
+
+1. **Extraction** — `pdfplumber` pulls the raw text from the uploaded PDF.
+2. **NLP** — spaCy detects sections, skills, job title and location (postal
+   address pattern first, NER as fallback — `en_core_web_sm` is an English
+   model and unreliable on French text).
+3. **Job search** — Adzuna is queried around the detected location (30 km
+   radius). If that yields nothing (Adzuna's geocoding misses small
+   towns/suburbs), you can pick a French region from the dropdown as a
+   manual fallback — no blind nationwide search.
+4. **Scoring** — each listing is scored against your CV with the semantic
+   engine and ranked by overall compatibility.
+5. **AI feedback** — click "Analyser cette offre" on any listing to get a
+   personalized, French-language Claude analysis (skill gaps, ATS keyword
+   suggestions, structural improvements).
 
 ## Score breakdown
 
@@ -36,11 +60,13 @@ Portfolio project — ML Engineer track.
 | CV structure completeness | 25 % |
 
 Claude AI feedback is optional and requires an `ANTHROPIC_API_KEY`.
+Job search requires `ADZUNA_ID` / `ADZUNA_API_KEY` (free Adzuna developer
+account — register on their site to obtain credentials).
 
 ## Local setup
 
 ```bash
-cp .env.example .env      # add your ANTHROPIC_API_KEY
+cp .env.example .env      # add ANTHROPIC_API_KEY and ADZUNA_ID / ADZUNA_API_KEY
 make install
 make run                  # Gradio UI → http://localhost:7860
 make dev                  # FastAPI  → http://localhost:8000/docs

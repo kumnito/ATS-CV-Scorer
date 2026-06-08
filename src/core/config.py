@@ -12,5 +12,9 @@ class Settings(BaseSettings):
     sentence_transformer_model: str = "all-MiniLM-L6-v2"
     max_pdf_size_mb: int = 10
 
+    adzuna_id: str = ""
+    adzuna_api_key: str = ""
+    adzuna_country: str = "fr"
+
 
 settings = Settings()

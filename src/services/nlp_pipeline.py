@@ -127,10 +127,54 @@ TECH_SKILLS: dict[str, list[str]] = {
 
 _ALL_SKILLS = sorted({s.lower() for cat in TECH_SKILLS.values() for s in cat})
 
+JOB_TITLE_KEYWORDS: list[str] = [
+    "engineer",
+    "developer",
+    "scientist",
+    "analyst",
+    "manager",
+    "designer",
+    "architect",
+    "consultant",
+    "specialist",
+    "lead",
+    "director",
+    "researcher",
+    "administrator",
+    "technician",
+]
+
 YEAR_RANGE_RE = re.compile(
     r"\b(19|20)(\d{2})\s*[-–—]\s*((19|20)(\d{2})|present|current|now|today)\b",
     re.IGNORECASE,
 )
+
+JOB_TITLE_RE = re.compile(r"\b(" + "|".join(JOB_TITLE_KEYWORDS) + r")\b", re.IGNORECASE)
+
+PERSON_NAME_RE = re.compile(r"^[A-Z][A-Za-zà-öù-ÿ'-]+$")
+
+# Place names are proper nouns (capitalized). en_core_web_sm — an ENGLISH
+# model — occasionally folds a stray lowercase word from non-English text into
+# a GPE/LOC span (e.g. "opérationnelle - Paris" tagged as one entity); this
+# pattern lets us recover the genuine capitalized run from such noisy spans.
+PROPER_NOUN_RUN_RE = re.compile(
+    r"[A-ZÀ-Ý][\wà-öù-ÿ'-]*(?:[\s,-]+[A-ZÀ-Ý][\wà-öù-ÿ'-]*)*"
+)
+
+# French CVs routinely include a full postal address in the header
+# (e.g. "314/1 rue Jean Jaurès\n59170, CROIX"). A 5-digit postal code
+# followed by a capitalized word is a far more reliable location signal
+# than spaCy's GPE/LOC entities — en_core_web_sm is an ENGLISH model and
+# regularly misclassifies French job titles/section headers (e.g.
+# "DÉVELOPPEUR") as places. Tried first; NER is only a fallback below.
+POSTAL_CODE_CITY_RE = re.compile(
+    r"\b\d{5}\b[ \t,–—-]*([A-ZÀ-Ý][\wà-öù-ÿ'-]*(?:[ \t-][A-ZÀ-Ý][\wà-öù-ÿ'-]*)*)"
+)
+
+# Splits header lines like "ML Engineer Junior - Paris, France" into
+# ["ML Engineer Junior", "Paris, France"] without breaking compound words
+# (e.g. "Full-Stack") or "City, Country" pairs (no space before the comma).
+TITLE_SPLIT_RE = re.compile(r"\s+[-–—,]\s+|\s*\|\s*")
 
 
 class NLPPipeline:
@@ -141,14 +185,18 @@ class NLPPipeline:
         cleaned = _clean_text(text)
         sections = _detect_sections(cleaned)
         doc = self.nlp(cleaned[:100_000])
+        entities = _extract_entities(doc)
+        header = sections.get("header", "")
 
         return ParsedCV(
             raw_text=cleaned,
             sections=sections,
-            entities=_extract_entities(doc),
+            entities=entities,
             skills=_extract_skills(cleaned),
             experience_years=_estimate_experience_years(sections.get("experience", "")),
             keywords=_extract_keywords(doc),
+            job_title=_extract_job_title(header),
+            location=_extract_location(header, entities),
         )
 
 
@@ -208,6 +256,66 @@ def _extract_entities(doc) -> dict[str, list[str]]:
         if key:
             result[key].append(ent.text)
     return {k: list(dict.fromkeys(v)) for k, v in result.items()}
+
+
+def _looks_like_person_name(line: str) -> bool:
+    words = line.split()
+    return (
+        1 < len(words) <= 4
+        and all(PERSON_NAME_RE.match(w) for w in words)
+        and not JOB_TITLE_RE.search(line)
+    )
+
+
+def _extract_job_title(header_text: str) -> Optional[str]:
+    for line in header_text.split("\n"):
+        stripped = line.strip()
+        if (
+            not stripped
+            or _looks_like_person_name(stripped)
+            or not JOB_TITLE_RE.search(stripped)
+        ):
+            continue
+        for segment in TITLE_SPLIT_RE.split(stripped):
+            segment = segment.strip()
+            if segment and JOB_TITLE_RE.search(segment):
+                return segment
+    return None
+
+
+def _clean_location_candidate(raw: str) -> Optional[str]:
+    runs = PROPER_NOUN_RUN_RE.findall(raw)
+    if not runs:
+        return None
+    return max(runs, key=len).strip(" ,-")
+
+
+def _extract_location(
+    header_text: str, entities: dict[str, list[str]]
+) -> Optional[str]:
+    postal_match = POSTAL_CODE_CITY_RE.search(header_text)
+    if postal_match:
+        return postal_match.group(1).strip().title()
+
+    locations = list(
+        dict.fromkeys(
+            filter(
+                None,
+                (
+                    _clean_location_candidate(loc)
+                    for loc in entities.get("locations", [])
+                ),
+            )
+        )
+    )
+    if not locations:
+        return None
+    in_header = [
+        (header_text.index(loc), loc) for loc in locations if loc in header_text
+    ]
+    if in_header:
+        return min(in_header)[1]
+    return locations[0]
 
 
 def _extract_skills(text: str) -> list[str]:

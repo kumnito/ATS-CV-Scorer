@@ -1,0 +1,31 @@
+ML Engineer (H/F) — Paris, France
+
+À propos du poste :
+Nous recherchons un·e Machine Learning Engineer pour rejoindre notre équipe Data
+basée à Paris. Vous travaillerez sur la conception, l'entraînement et le déploiement
+de modèles de NLP et de computer vision en production.
+
+Responsabilités :
+- Concevoir, entraîner et déployer des modèles de machine learning et de deep
+  learning (PyTorch, TensorFlow, scikit-learn).
+- Construire des pipelines de données robustes avec Python, SQL et Apache Airflow.
+- Déployer des services via Docker et Kubernetes sur AWS ou GCP.
+- Mettre en place des pratiques MLOps : CI/CD avec GitHub Actions, suivi
+  d'expériences avec MLflow, monitoring des modèles en production.
+- Collaborer avec les équipes produit pour intégrer des modèles de NLP basés sur
+  Hugging Face Transformers et des LLM.
+
+Profil recherché :
+- 2+ ans d'expérience en ingénierie ML ou data science.
+- Maîtrise de Python, Git et des bases de données SQL et NoSQL (PostgreSQL,
+  MongoDB).
+- Expérience avec Docker, Kubernetes et le cloud (AWS, GCP ou Azure).
+- Bonne connaissance des frameworks ML : PyTorch, TensorFlow, scikit-learn,
+  Hugging Face.
+- Anglais courant ; le français est un plus.
+- Une expérience avec FastAPI, Spark ou Terraform est un atout.
+
+Ce que nous offrons :
+- Poste basé à Paris, télétravail partiel possible.
+- Environnement stimulant avec des projets NLP et computer vision à fort impact.
+- Budget formation et accompagnement vers des certifications cloud (AWS, GCP).

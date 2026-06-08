@@ -1,0 +1,30 @@
+# PDF processing
+pdfplumber==0.11.4
+
+# NLP
+spacy==3.7.6
+https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
+sentence-transformers==3.0.1
+
+# Claude API
+anthropic==0.40.0
+
+# API
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+python-multipart==0.0.12
+
+# UI
+gradio==4.44.0
+
+# Config & validation
+pydantic==2.12.5
+pydantic-settings==2.6.1
+python-dotenv==1.0.1
+
+# Utils
+numpy<2.0
+scikit-learn==1.5.2
+
+# Dev & tests
+pytest==8.3.4

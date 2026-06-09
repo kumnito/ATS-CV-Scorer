@@ -60,20 +60,27 @@ def find_matching_jobs(
         return []
 
     listings: list = []
-    if parsed_cv.location:
-        listings = job_search.search(
-            query=query,
-            location=parsed_cv.location,
-            distance=_CV_LOCATION_RADIUS_KM,
-            max_results=max_results,
-        )
-    if not listings and region:
-        # Adzuna's geocoding misses small towns/suburbs (e.g. "Croix" near
-        # Lille returns 0 results while "Hauts-de-France" returns several) —
-        # fall back to the user-chosen region rather than guessing nationwide
-        # and surfacing irrelevant listings far from the candidate.
+    if region:
+        # User's explicit region always takes priority — avoids Adzuna
+        # geocoding ambiguous city names (e.g. "Croix" → Pont-Croix/Finistère
+        # instead of Croix/59 near Lille) regardless of whether the city
+        # search would return results.
         listings = job_search.search(
             query=query, location=region, max_results=max_results
+        )
+    elif parsed_cv.location:
+        # Include postal code when available for precise Adzuna geocoding:
+        # "59170 Croix" is unambiguous, "Croix" alone is not.
+        where = (
+            f"{parsed_cv.postal_code} {parsed_cv.location}".strip()
+            if parsed_cv.postal_code
+            else parsed_cv.location
+        )
+        listings = job_search.search(
+            query=query,
+            location=where,
+            distance=_CV_LOCATION_RADIUS_KM,
+            max_results=max_results,
         )
 
     matches = [

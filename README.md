@@ -26,9 +26,10 @@ you click "Analyser cette offre".
 
 | Layer | Tech |
 |---|---|
-| PDF extraction | pdfplumber |
+| PDF extraction | pdfplumber (layout-aware — single/two-column detection) |
 | NLP | spaCy `en_core_web_sm` |
 | Semantic scoring | `sentence-transformers` (all-MiniLM-L6-v2) |
+| CV quality scoring | custom rule-based scorer (structure + content, 0-100) |
 | AI feedback | Anthropic Claude API (responses in French) |
 | Job search | Adzuna API (`httpx`) |
 | API | FastAPI |
@@ -37,17 +38,24 @@ you click "Analyser cette offre".
 
 ## How it works
 
-1. **Extraction** — `pdfplumber` pulls the raw text from the uploaded PDF.
-2. **NLP** — spaCy detects sections, skills, job title and location (postal
-   address pattern first, NER as fallback — `en_core_web_sm` is an English
-   model and unreliable on French text).
-3. **Job search** — Adzuna is queried around the detected location (30 km
+1. **Extraction** — `CVTransformer` uses pdfplumber's character-level
+   positional data to detect layout (single / two-column), reconstruct
+   reading order, and produce a fully structured `NormalizedCV` (header,
+   skills, experience, education, projects).
+2. **CV quality analysis** — `CVQualityScorer` immediately produces a
+   quality report: structure score, content score, detected/missing
+   sections, keyword density, career timeline, gaps, and ATS
+   recommendations — visible before any job search.
+3. **NLP** — spaCy detects the job title and location from the header
+   (postal address pattern first, filtered NER as fallback — `en_core_web_sm`
+   is an English model and unreliable on French text).
+4. **Job search** — Adzuna is queried around the detected location (30 km
    radius). If that yields nothing (Adzuna's geocoding misses small
    towns/suburbs), you can pick a French region from the dropdown as a
    manual fallback — no blind nationwide search.
-4. **Scoring** — each listing is scored against your CV with the semantic
+5. **Scoring** — each listing is scored against your CV with the semantic
    engine and ranked by overall compatibility.
-5. **AI feedback** — click "Analyser cette offre" on any listing to get a
+6. **AI feedback** — click "Analyser cette offre" on any listing to get a
    personalized, French-language Claude analysis (skill gaps, ATS keyword
    suggestions, structural improvements).
 

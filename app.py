@@ -4,11 +4,13 @@ import gradio as gr
 import gradio_client.utils as _gradio_client_utils
 
 from src.core.config import settings
+from src.core.schemas import CVQualityReport, NormalizedCV
 from src.services.claude_feedback import ClaudeFeedback
+from src.services.cv_quality_scorer import CVQualityScorer
+from src.services.cv_transformer import CVTransformer
 from src.services.job_matcher import FRANCE_REGIONS, find_matching_jobs
 from src.services.job_search import JobSearchService
 from src.services.nlp_pipeline import NLPPipeline
-from src.services.pdf_extractor import PDFExtractor
 from src.services.semantic_scorer import SemanticScorer
 
 
@@ -29,9 +31,10 @@ def _patch_gradio_client_bool_schema() -> None:
 
 _patch_gradio_client_bool_schema()
 
-_pdf_extractor = PDFExtractor()
+_cv_transformer = CVTransformer()
 _nlp_pipeline = NLPPipeline()
 _semantic_scorer = SemanticScorer()
+_cv_quality_scorer = CVQualityScorer()
 _job_search_service = JobSearchService(
     app_id=settings.adzuna_id,
     app_key=settings.adzuna_api_key,
@@ -43,6 +46,201 @@ MAX_JOB_RESULTS = 10
 
 def _score_color(score: float) -> str:
     return "🟢" if score >= 70 else ("🟡" if score >= 45 else "🔴")
+
+
+def _bar(value: int, max_val: int = 100, width: int = 20) -> str:
+    filled = round(value / max_val * width)
+    return "█" * filled + "░" * (width - filled)
+
+
+def _format_quality_report(cv: NormalizedCV, report: CVQualityReport) -> str:
+    layout_badge = (
+        "✅ 1 colonne (optimal ATS)" if report.layout == "single_column" else "⚠️ 2 colonnes (risque parseur ATS)"
+    )
+
+    lines = [
+        "## 📊 Qualité du CV",
+        "",
+        f"**Score global : {report.score_global}/100**",
+        f"`{_bar(report.score_global)}` {report.score_global}%",
+        "",
+        "| Dimension | Score | Barre |",
+        "|---|---|---|",
+        f"| Structure | {report.score_structure}/100 | `{_bar(report.score_structure, width=10)}` |",
+        f"| Contenu   | {report.score_contenu}/100 | `{_bar(report.score_contenu, width=10)}` |",
+        "",
+        f"📐 Layout : {layout_badge}  ·  📝 {report.word_count} mots  ·  📊 Densité mots-clés : {report.keyword_density:.1%}",
+        "",
+    ]
+
+    if report.sections_detectees:
+        lines += [
+            "### ✅ Sections détectées",
+            "  ".join(f"`{s}`" for s in report.sections_detectees),
+            "",
+        ]
+
+    if report.sections_manquantes:
+        lines += [
+            "### ❌ Sections manquantes",
+            "  ".join(f"`{s}`" for s in report.sections_manquantes),
+            "",
+        ]
+
+    badges = []
+    if report.has_metrics:
+        badges.append("✅ Métriques quantifiées")
+    else:
+        badges.append("❌ Pas de métriques")
+    lines += ["  ".join(badges), ""]
+
+    if report.career_gaps:
+        lines += ["### ⚠️ Trous de carrière détectés"]
+        for gap in report.career_gaps:
+            lines.append(f"- {gap}")
+        lines.append("")
+
+    if report.recommendations:
+        lines += ["### 💡 Recommandations (par impact ATS décroissant)"]
+        for i, rec in enumerate(report.recommendations, 1):
+            lines.append(f"{i}. {rec}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def _format_timeline(cv: NormalizedCV, report: CVQualityReport) -> str:
+    if not cv.experience and not cv.education:
+        return ""
+
+    lines = ["## 📅 Timeline carrière"]
+    if report.total_experience_years > 0:
+        lines.append(f"**Expérience totale : {report.total_experience_years:.1f} an(s)**")
+    if report.career_start_year:
+        lines.append(f"Premier poste détecté : {report.career_start_year}")
+    lines.append("")
+
+    events: list[tuple[int, int, str]] = []
+    for e in cv.experience:
+        label_parts = [p for p in [e.title, e.company] if p]
+        label = " @ ".join(label_parts) if label_parts else "Poste non détecté"
+        dur = f" ({e.years:.0f} an(s))" if e.years else ""
+        period = e.period or (
+            f"{e.date_start or '?'} – {'présent' if e.is_current else (e.date_end or '?')}"
+        )
+        s_year = int(e.date_start.split("-")[0]) if e.date_start else 0
+        s_month = int(e.date_start.split("-")[1]) if e.date_start and "-" in e.date_start else 1
+        events.append((s_year, s_month, f"💼 **{period}** : {label}{dur}"))
+
+    for e in cv.education:
+        label = " — ".join(p for p in [e.degree, e.school] if p) or "Formation non détectée"
+        dur = f" ({round((e.duration_months or 0) / 12):.0f} an(s))" if e.duration_months else ""
+        period = e.year or (
+            f"{e.date_start or '?'} – {'présent' if e.is_current else (e.date_end or '?')}"
+        )
+        s_year = int(e.date_start.split("-")[0]) if e.date_start else 0
+        s_month = int(e.date_start.split("-")[1]) if e.date_start and "-" in e.date_start else 1
+        events.append((s_year, s_month, f"🎓 **{period}** : {label}{dur}"))
+
+    events.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    for _, _, label in events:
+        lines.append(f"- {label}")
+
+    if report.career_gaps:
+        lines.append("")
+        lines.append("**Périodes sans activité détectée :**")
+        for gap in report.career_gaps:
+            lines.append(f"  - ⚠️ {gap}")
+
+    return "\n".join(lines)
+
+
+def _format_profile_summary(parsed_cv, normalized_cv: NormalizedCV) -> str:
+    """Profil détecté affiché dans l'onglet Analyse."""
+    name = normalized_cv.header.name or ""
+    title = parsed_cv.job_title or normalized_cv.header.title or ""
+    location = parsed_cv.location or normalized_cv.header.location or ""
+
+    header = " · ".join(p for p in [name, title] if p) or "Profil détecté"
+    meta = []
+    if location:
+        meta.append(f"📍 {location}")
+    top_skills = (parsed_cv.skills or [])[:6]
+    if top_skills:
+        meta.append("🛠 " + ", ".join(top_skills))
+
+    lines = [f"### 👤 {header}"]
+    if meta:
+        lines.append("  ·  ".join(meta))
+    return "\n".join(lines)
+
+
+def _format_cv_context_strip(parsed_cv, report: CVQualityReport) -> str:
+    """Bandeau de contexte compact affiché en haut de l'onglet Recherche."""
+    parts = []
+    if parsed_cv.job_title:
+        parts.append(f"**{parsed_cv.job_title}**")
+    if parsed_cv.location:
+        parts.append(f"📍 {parsed_cv.location}")
+    color = _score_color(report.score_global)
+    parts.append(f"{color} Score CV : **{report.score_global}/100**")
+    return "✅ Profil chargé — " + " · ".join(parts)
+
+
+# ── Handler 1 : traitement du CV ─────────────────────────────────────────────
+
+def on_cv_upload(cv_file):
+    _reset = (
+        "", "", "",          # quality_md, timeline_md, profile_md
+        None, None, None,    # parsed_cv_state, normalized_cv_state, quality_report_state
+        "⚠️ Uploadez votre CV en onglet 1 pour commencer.",  # cv_context_md
+        gr.update(interactive=False),                         # search_btn
+    )
+
+    if cv_file is None:
+        return _reset
+
+    normalized_cv = _cv_transformer.transform(cv_file.name)
+    if not normalized_cv.raw_text:
+        return (
+            "❌ Impossible d'extraire le texte du PDF.",
+            "", "",
+            None, None, None,
+            "❌ Échec de l'extraction PDF — vérifiez que le fichier n'est pas protégé.",
+            gr.update(interactive=False),
+        )
+
+    parsed_cv = _nlp_pipeline.parse_normalized(normalized_cv)
+    quality_report = _cv_quality_scorer.score(normalized_cv)
+
+    return (
+        _format_quality_report(normalized_cv, quality_report),
+        _format_timeline(normalized_cv, quality_report),
+        _format_profile_summary(parsed_cv, normalized_cv),
+        parsed_cv,
+        normalized_cv,
+        quality_report,
+        _format_cv_context_strip(parsed_cv, quality_report),
+        gr.update(interactive=True),
+    )
+
+
+def on_cv_clear():
+    return (
+        "", "", "",
+        None, None, None,
+        "⚠️ Uploadez votre CV en onglet 1 pour commencer.",
+        gr.update(interactive=False),
+    )
+
+
+# ── Handler 2 : recherche et scoring des offres ───────────────────────────────
+
+def _empty_job_slots() -> list:
+    result = []
+    for _ in range(MAX_JOB_RESULTS):
+        result += _slot_updates()
+    return result
 
 
 def _format_job_card(rank: int, match) -> str:
@@ -84,27 +282,11 @@ def _slot_updates(rank: int | None = None, match=None):
     ]
 
 
-def _build_search_response(status: str, parsed_cv, matches: list) -> list:
-    outputs = [status, parsed_cv, matches]
-    for i in range(MAX_JOB_RESULTS):
-        if i < len(matches):
-            outputs += _slot_updates(rank=i + 1, match=matches[i])
-        else:
-            outputs += _slot_updates()
-    return outputs
+def on_search(parsed_cv, region):
+    if parsed_cv is None:
+        status = "⚠️ Uploadez d'abord votre CV en onglet 1."
+        return [status, []] + _empty_job_slots()
 
-
-def search_jobs(cv_file, region):
-    if cv_file is None:
-        return _build_search_response("⚠️ Veuillez uploader un CV.", None, [])
-
-    cv_text = _pdf_extractor.extract(cv_file.name)
-    if not cv_text:
-        return _build_search_response(
-            "❌ Impossible d'extraire le texte du PDF.", None, []
-        )
-
-    parsed_cv = _nlp_pipeline.parse_cv(cv_text)
     matches = find_matching_jobs(
         parsed_cv,
         _job_search_service,
@@ -113,11 +295,17 @@ def search_jobs(cv_file, region):
         region=region or None,
     )
 
-    profile_line = f"**Profil détecté :** {parsed_cv.job_title or '_non déterminé_'}"
-    if parsed_cv.location:
-        profile_line += f" · 📍 {parsed_cv.location} (rayon 30 km)"
     if region:
-        profile_line += f" · 🗺️ {region}"
+        profile_line = f"**Profil :** {parsed_cv.job_title or '_non déterminé_'} · 🗺️ {region}"
+    else:
+        profile_line = f"**Profil :** {parsed_cv.job_title or '_non déterminé_'}"
+        if parsed_cv.location:
+            loc_display = (
+                f"{parsed_cv.postal_code} {parsed_cv.location}".strip()
+                if parsed_cv.postal_code
+                else parsed_cv.location
+            )
+            profile_line += f" · 📍 {loc_display} (rayon 30 km)"
 
     if matches:
         status = (
@@ -131,8 +319,13 @@ def search_jobs(cv_file, region):
             "vos **compétences clés** et votre **ville**, ou réessayez un peu plus tard."
         )
 
-    return _build_search_response(status, parsed_cv, matches)
+    outputs = [status, matches]
+    for i in range(MAX_JOB_RESULTS):
+        outputs += _slot_updates(rank=i + 1, match=matches[i]) if i < len(matches) else _slot_updates()
+    return outputs
 
+
+# ── Handler 3 : feedback Claude par offre (à la demande) ─────────────────────
 
 _ANALYZE_LOADING_MD = (
     "⏳ **Analyse en cours…** Claude examine cette offre au regard de votre "
@@ -166,38 +359,60 @@ def _make_analyze_handler(index: int):
     return _analyze_one
 
 
+# ── Interface Gradio ──────────────────────────────────────────────────────────
+
 with gr.Blocks(
     title="ATS CV Scorer",
     theme=gr.themes.Soft(primary_hue="indigo", secondary_hue="blue"),
 ) as demo:
-    gr.Markdown(
-        """# 📋 ATS CV Scorer — Recherche automatique d'offres
-        Uploadez votre CV : le pipeline NLP en extrait votre **titre de poste**, vos
-        **compétences** et votre **localisation**, recherche des offres correspondantes
-        via l'API **Adzuna**, puis les score automatiquement contre votre profil avec un
-        moteur de similarité sémantique. Vous pouvez ensuite demander un **feedback Claude
-        personnalisé pour chaque offre, à la demande** — aucun appel IA n'est déclenché
-        tant que vous ne cliquez pas sur "Analyser".
-        """
-    )
+    gr.Markdown("# 📋 ATS CV Scorer")
 
     parsed_cv_state = gr.State(None)
+    normalized_cv_state = gr.State(None)
+    quality_report_state = gr.State(None)
     matches_state = gr.State([])
 
-    with gr.Row():
-        with gr.Column(scale=1):
-            job_cv_input = gr.File(label="CV (PDF)", file_types=[".pdf"])
-            region_dropdown = gr.Dropdown(
-                choices=FRANCE_REGIONS,
-                label="Région (optionnel — repli si la localisation du CV ne donne aucun résultat à 30 km)",
-                value=None,
+    with gr.Tabs():
+
+        # ── Onglet 1 : Analyse du CV ──────────────────────────────────────────
+        with gr.Tab("📋 Analyse du CV"):
+            gr.Markdown(
+                "Uploadez votre CV pour obtenir immédiatement une **analyse qualité ATS** — "
+                "score structure/contenu, timeline carrière, compétences détectées et recommandations. "
+                "Aucun appel réseau externe n'est déclenché à cette étape."
             )
-            search_btn = gr.Button(
-                "🔍 Rechercher des offres correspondantes", variant="primary"
+            with gr.Row():
+                with gr.Column(scale=1):
+                    cv_input = gr.File(label="CV (PDF)", file_types=[".pdf"])
+                    profile_md = gr.Markdown()
+                with gr.Column(scale=2):
+                    quality_md = gr.Markdown()
+                    timeline_md = gr.Markdown()
+
+        # ── Onglet 2 : Recherche d'offres ─────────────────────────────────────
+        with gr.Tab("🔍 Recherche d'offres"):
+            gr.Markdown(
+                "Recherchez des offres correspondant à votre profil via **Adzuna**, "
+                "scorées automatiquement par similarité sémantique. Demandez ensuite un "
+                "**feedback Claude personnalisé** pour chaque offre à la demande — "
+                "aucun appel IA n'est déclenché tant que vous ne cliquez pas sur « Analyser »."
             )
+            cv_context_md = gr.Markdown("⚠️ Uploadez votre CV en onglet 1 pour commencer.")
+            with gr.Row():
+                region_dropdown = gr.Dropdown(
+                    choices=FRANCE_REGIONS,
+                    label="Région (prioritaire si sélectionnée — remplace la localisation du CV pour la recherche Adzuna)",
+                    value=None,
+                    scale=3,
+                )
+                search_btn = gr.Button(
+                    "🔍 Rechercher des offres correspondantes",
+                    variant="primary",
+                    interactive=False,
+                    scale=1,
+                )
             search_status_md = gr.Markdown()
 
-        with gr.Column(scale=2):
             job_slots = []
             for _ in range(MAX_JOB_RESULTS):
                 with gr.Group(visible=False) as group:
@@ -208,12 +423,30 @@ with gr.Blocks(
                     slot_feedback_md = gr.Markdown(visible=False)
                 job_slots.append((group, job_md, slot_analyze_btn, slot_feedback_md))
 
-    search_outputs = [search_status_md, parsed_cv_state, matches_state]
+    # ── Câblage des événements ────────────────────────────────────────────────
+
+    _upload_outputs = [
+        quality_md,
+        timeline_md,
+        profile_md,
+        parsed_cv_state,
+        normalized_cv_state,
+        quality_report_state,
+        cv_context_md,
+        search_btn,
+    ]
+
+    cv_input.upload(fn=on_cv_upload, inputs=[cv_input], outputs=_upload_outputs)
+    cv_input.clear(fn=on_cv_clear, outputs=_upload_outputs)
+
+    _search_outputs = [search_status_md, matches_state]
     for group, job_md, slot_analyze_btn, slot_feedback_md in job_slots:
-        search_outputs += [group, job_md, slot_analyze_btn, slot_feedback_md]
+        _search_outputs += [group, job_md, slot_analyze_btn, slot_feedback_md]
 
     search_btn.click(
-        fn=search_jobs, inputs=[job_cv_input, region_dropdown], outputs=search_outputs
+        fn=on_search,
+        inputs=[parsed_cv_state, region_dropdown],
+        outputs=_search_outputs,
     )
 
     for idx, (_, _, slot_analyze_btn, slot_feedback_md) in enumerate(job_slots):
@@ -224,4 +457,4 @@ with gr.Blocks(
         )
 
 if __name__ == "__main__":
-    demo.launch()
+    demo.launch(server_name="0.0.0.0", server_port=7860)

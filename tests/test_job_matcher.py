@@ -32,8 +32,8 @@ class _FakeScorer:
         return ScoringResult(overall_score=score, breakdown=_BREAKDOWN)
 
 
-def _parsed_cv(job_title="ML Engineer", location="Croix") -> ParsedCV:
-    return ParsedCV(raw_text="...", job_title=job_title, location=location)
+def _parsed_cv(job_title="ML Engineer", location="Croix", postal_code=None) -> ParsedCV:
+    return ParsedCV(raw_text="...", job_title=job_title, location=location, postal_code=postal_code)
 
 
 def test_build_query_strips_seniority_qualifiers():
@@ -61,9 +61,11 @@ def test_find_matching_jobs_searches_around_cv_location_within_30km():
     assert job_search.calls == [("ML Engineer", "Croix", 30)]
 
 
-def test_find_matching_jobs_falls_back_to_selected_region_when_cv_location_yields_nothing():
+def test_find_matching_jobs_region_takes_priority_over_cv_location():
+    # Quand une région est sélectionnée, elle est utilisée directement —
+    # évite les mauvais géocodages Adzuna (ex. "Croix" → Pont-Croix/Finistère).
     job_search = _FakeJobSearch(
-        {"Croix": [], "Hauts-de-France": [_job(location="Lille")]}
+        {"Croix": [_job(location="Pont-Croix")], "Hauts-de-France": [_job(location="Lille")]}
     )
 
     matches = find_matching_jobs(
@@ -74,27 +76,26 @@ def test_find_matching_jobs_falls_back_to_selected_region_when_cv_location_yield
     )
 
     assert len(matches) == 1
-    assert job_search.calls == [
-        ("ML Engineer", "Croix", 30),
-        ("ML Engineer", "Hauts-de-France", None),
-    ]
+    assert matches[0].job.location == "Lille"
+    assert job_search.calls == [("ML Engineer", "Hauts-de-France", None)]
 
 
-def test_find_matching_jobs_does_not_fall_back_to_region_when_cv_location_has_results():
-    job_search = _FakeJobSearch(
-        {"Croix": [_job(location="Croix")], "Hauts-de-France": [_job(location="Lille")]}
-    )
+def test_find_matching_jobs_uses_city_when_no_region_selected():
+    job_search = _FakeJobSearch({"Croix": [_job(location="Croix")]})
 
-    matches = find_matching_jobs(
-        _parsed_cv(location="Croix"),
-        job_search,
-        _FakeScorer(),
-        region="Hauts-de-France",
-    )
+    matches = find_matching_jobs(_parsed_cv(location="Croix"), job_search, _FakeScorer())
 
     assert len(matches) == 1
     assert matches[0].job.location == "Croix"
     assert job_search.calls == [("ML Engineer", "Croix", 30)]
+
+
+def test_find_matching_jobs_uses_postal_code_with_location():
+    job_search = _FakeJobSearch({"59170 Croix": [_job()]})
+
+    find_matching_jobs(_parsed_cv(location="Croix", postal_code="59170"), job_search, _FakeScorer())
+
+    assert job_search.calls == [("ML Engineer", "59170 Croix", 30)]
 
 
 def test_find_matching_jobs_uses_region_directly_when_cv_has_no_location():

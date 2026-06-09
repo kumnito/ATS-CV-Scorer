@@ -5,176 +5,23 @@ from typing import Optional
 
 import spacy
 
-from src.core.schemas import ParsedCV
-
-SECTION_HEADERS: dict[str, str] = {
-    "summary": r"^(summary|objective|profile|about me|professional summary|career objective|executive summary|about)",
-    "experience": r"^(experience|work experience|employment|professional experience|career history|work history|employment history|professional background)",
-    "education": r"^(education|academic|qualification|academic background|educational background|studies|academic qualifications)",
-    "skills": r"^(skills|technical skills|core competencies|competencies|expertise|technologies|tech stack|tools & technologies|key skills)",
-    "projects": r"^(projects|key projects|personal projects|professional projects|notable projects|side projects)",
-    "certifications": r"^(certifications?|certificates?|awards?|achievements?|licenses?|accreditations?)",
-    "languages": r"^(languages?|spoken languages?|language skills?)",
-}
-
-TECH_SKILLS: dict[str, list[str]] = {
-    "languages": [
-        "python",
-        "java",
-        "javascript",
-        "typescript",
-        "c++",
-        "c#",
-        "go",
-        "rust",
-        "scala",
-        "r",
-        "kotlin",
-        "swift",
-        "php",
-        "ruby",
-        "bash",
-        "sql",
-        "matlab",
-    ],
-    "frameworks": [
-        "react",
-        "vue",
-        "angular",
-        "django",
-        "flask",
-        "fastapi",
-        "spring",
-        "express",
-        "next.js",
-        "nuxt",
-        "laravel",
-        "rails",
-        "asp.net",
-    ],
-    "ml_ai": [
-        "tensorflow",
-        "pytorch",
-        "scikit-learn",
-        "keras",
-        "xgboost",
-        "lightgbm",
-        "pandas",
-        "numpy",
-        "scipy",
-        "hugging face",
-        "transformers",
-        "langchain",
-        "openai",
-        "llm",
-        "nlp",
-        "computer vision",
-        "deep learning",
-        "machine learning",
-        "reinforcement learning",
-        "mlflow",
-        "kubeflow",
-    ],
-    "cloud_devops": [
-        "aws",
-        "azure",
-        "gcp",
-        "google cloud",
-        "docker",
-        "kubernetes",
-        "terraform",
-        "helm",
-        "ansible",
-        "jenkins",
-        "github actions",
-        "gitlab ci",
-        "ci/cd",
-        "airflow",
-        "kafka",
-        "spark",
-        "hadoop",
-        "databricks",
-    ],
-    "databases": [
-        "postgresql",
-        "mysql",
-        "mongodb",
-        "redis",
-        "elasticsearch",
-        "sqlite",
-        "cassandra",
-        "bigquery",
-        "snowflake",
-        "dbt",
-        "neo4j",
-        "dynamodb",
-    ],
-    "tools": [
-        "git",
-        "github",
-        "gitlab",
-        "jira",
-        "confluence",
-        "tableau",
-        "power bi",
-        "looker",
-        "grafana",
-        "prometheus",
-        "datadog",
-        "linux",
-    ],
-}
-
-_ALL_SKILLS = sorted({s.lower() for cat in TECH_SKILLS.values() for s in cat})
-
-JOB_TITLE_KEYWORDS: list[str] = [
-    "engineer",
-    "developer",
-    "scientist",
-    "analyst",
-    "manager",
-    "designer",
-    "architect",
-    "consultant",
-    "specialist",
-    "lead",
-    "director",
-    "researcher",
-    "administrator",
-    "technician",
-]
-
-YEAR_RANGE_RE = re.compile(
-    r"\b(19|20)(\d{2})\s*[-–—]\s*((19|20)(\d{2})|present|current|now|today)\b",
-    re.IGNORECASE,
+from src.core.lexicons import (
+    ALL_SKILLS,
+    JOB_TITLE_RE,
+    LOCATION_BLOCKLIST,
+    POSTAL_CODE_CITY_RE,
+    PROPER_NOUN_RUN_RE,
+    SECTION_HEADERS,
+    TECH_SKILLS,
+    TITLE_SPLIT_RE,
+    YEAR_RANGE_RE,
+    PERSON_NAME_RE,
 )
+from src.core.schemas import NormalizedCV, ParsedCV
 
-JOB_TITLE_RE = re.compile(r"\b(" + "|".join(JOB_TITLE_KEYWORDS) + r")\b", re.IGNORECASE)
+TECH_SKILLS = TECH_SKILLS  # re-export for external callers that imported it from here
 
-PERSON_NAME_RE = re.compile(r"^[A-Z][A-Za-zà-öù-ÿ'-]+$")
-
-# Place names are proper nouns (capitalized). en_core_web_sm — an ENGLISH
-# model — occasionally folds a stray lowercase word from non-English text into
-# a GPE/LOC span (e.g. "opérationnelle - Paris" tagged as one entity); this
-# pattern lets us recover the genuine capitalized run from such noisy spans.
-PROPER_NOUN_RUN_RE = re.compile(
-    r"[A-ZÀ-Ý][\wà-öù-ÿ'-]*(?:[\s,-]+[A-ZÀ-Ý][\wà-öù-ÿ'-]*)*"
-)
-
-# French CVs routinely include a full postal address in the header
-# (e.g. "314/1 rue Jean Jaurès\n59170, CROIX"). A 5-digit postal code
-# followed by a capitalized word is a far more reliable location signal
-# than spaCy's GPE/LOC entities — en_core_web_sm is an ENGLISH model and
-# regularly misclassifies French job titles/section headers (e.g.
-# "DÉVELOPPEUR") as places. Tried first; NER is only a fallback below.
-POSTAL_CODE_CITY_RE = re.compile(
-    r"\b\d{5}\b[ \t,–—-]*([A-ZÀ-Ý][\wà-öù-ÿ'-]*(?:[ \t-][A-ZÀ-Ý][\wà-öù-ÿ'-]*)*)"
-)
-
-# Splits header lines like "ML Engineer Junior - Paris, France" into
-# ["ML Engineer Junior", "Paris, France"] without breaking compound words
-# (e.g. "Full-Stack") or "City, Country" pairs (no space before the comma).
-TITLE_SPLIT_RE = re.compile(r"\s+[-–—,]\s+|\s*\|\s*")
+_ALL_SKILLS = ALL_SKILLS
 
 
 class NLPPipeline:
@@ -182,6 +29,7 @@ class NLPPipeline:
         self.nlp = spacy.load(model)
 
     def parse_cv(self, text: str) -> ParsedCV:
+        """Parse a raw CV text string into a ParsedCV (text-based path)."""
         cleaned = _clean_text(text)
         sections = _detect_sections(cleaned)
         doc = self.nlp(cleaned[:100_000])
@@ -197,6 +45,44 @@ class NLPPipeline:
             keywords=_extract_keywords(doc),
             job_title=_extract_job_title(header),
             location=_extract_location(header, entities),
+        )
+
+    def parse_normalized(self, normalized_cv: NormalizedCV) -> ParsedCV:
+        """Build a ParsedCV from a NormalizedCV, preferring structured fields.
+
+        Structured fields (job_title, location, skills, experience_years,
+        sections) are taken directly from NormalizedCV where available —
+        bypassing the brittle regex/NER path that is unreliable on French CVs.
+        spaCy is still used for entities and keyword extraction on raw_text.
+        """
+        cleaned = _clean_text(normalized_cv.raw_text)
+        doc = self.nlp(cleaned[:100_000])
+        entities = _extract_entities(doc)
+
+        sections = _build_sections_from_normalized(normalized_cv)
+        all_skills = normalized_cv.skills.flat()
+
+        exp_months = sum(e.duration_months or 0 for e in normalized_cv.experience)
+        exp_years: Optional[float] = None
+        if exp_months > 0:
+            exp_years = round(exp_months / 12, 1)
+        else:
+            exp_years = _estimate_experience_years(sections.get("experience", ""))
+
+        job_title = normalized_cv.header.title or _extract_job_title(sections.get("header", ""))
+        location = normalized_cv.header.location or _extract_location(sections.get("header", ""), entities)
+        postal_code = normalized_cv.header.postal_code
+
+        return ParsedCV(
+            raw_text=cleaned,
+            sections=sections,
+            entities=entities,
+            skills=all_skills or _extract_skills(cleaned),
+            experience_years=exp_years,
+            keywords=_extract_keywords(doc),
+            job_title=job_title,
+            location=location,
+            postal_code=postal_code,
         )
 
 
@@ -230,7 +116,6 @@ def _match_section_header(line: str) -> Optional[str]:
     if not line or len(line) > 60:
         return None
     normalized = line.lower().rstrip(":").strip()
-    # Accept lines that look like headers: all-caps, title-cased, or ending with ':'
     looks_like_header = (
         line.isupper() or line.endswith(":") or re.match(r"^[A-Z][A-Za-z\s&/]+$", line)
     )
@@ -295,7 +180,7 @@ def _extract_location(
 ) -> Optional[str]:
     postal_match = POSTAL_CODE_CITY_RE.search(header_text)
     if postal_match:
-        return postal_match.group(1).strip().title()
+        return postal_match.group(2).strip().title()
 
     locations = list(
         dict.fromkeys(
@@ -304,6 +189,7 @@ def _extract_location(
                 (
                     _clean_location_candidate(loc)
                     for loc in entities.get("locations", [])
+                    if loc.lower().strip() not in LOCATION_BLOCKLIST
                 ),
             )
         )
@@ -339,6 +225,8 @@ def _estimate_experience_years(experience_text: str) -> Optional[float]:
         end_raw = m.group(3).lower()
         if end_raw in ("present", "current", "now", "today"):
             end = current_year
+        elif re.search(r"(aujourd|en\s*cours|présent|actuel)", end_raw, re.IGNORECASE):
+            end = current_year
         else:
             end = int(m.group(4) + m.group(5)) if m.group(4) else int(end_raw)
 
@@ -359,3 +247,29 @@ def _extract_keywords(doc) -> list[str]:
         and len(token.text) > 2
     ]
     return [word for word, _ in Counter(tokens).most_common(50)]
+
+
+def _build_sections_from_normalized(cv: NormalizedCV) -> dict[str, str]:
+    sections: dict[str, str] = {}
+    if cv.header.name or cv.header.title:
+        parts = [p for p in [cv.header.name, cv.header.title, cv.header.email, cv.header.phone, cv.header.location] if p]
+        sections["header"] = "\n".join(parts)
+    if cv.summary:
+        sections["summary"] = cv.summary
+    if cv.experience:
+        exp_lines = []
+        for e in cv.experience:
+            line_parts = [p for p in [e.title, e.company, e.period] if p]
+            exp_lines.append(" — ".join(line_parts))
+            exp_lines.extend(e.bullets)
+        sections["experience"] = "\n".join(exp_lines)
+    if cv.education:
+        edu_lines = [f"{e.degree} {e.school} {e.year or ''}".strip() for e in cv.education]
+        sections["education"] = "\n".join(edu_lines)
+    if cv.skills.flat():
+        sections["skills"] = ", ".join(cv.skills.flat())
+    if cv.projects:
+        sections["projects"] = "\n".join(p.name for p in cv.projects)
+    if cv.languages:
+        sections["languages"] = ", ".join(cv.languages)
+    return sections

@@ -149,6 +149,58 @@ def test_extract_location_prefers_postal_address_over_noisy_ner_entities():
     )
 
 
+# ---------------------------------------------------------------------------
+# Bug fixes — regression tests (2026-06-09)
+# ---------------------------------------------------------------------------
+
+
+def test_extract_location_filters_language_names():
+    # "Anglais" is classified as GPE by en_core_web_sm on French CVs — must be blocked.
+    assert _extract_location("Keo PEN\npen.keoh@gmail.com", {"locations": ["Anglais"]}) is None
+
+
+def test_extract_location_filters_soft_skill_words():
+    assert _extract_location("Jane Doe\nDeveloper", {"locations": ["Autonome"]}) is None
+
+
+def test_extract_location_filters_multiple_blocked_keeps_real_city():
+    result = _extract_location(
+        "Jane Doe\nDeveloper - Paris",
+        {"locations": ["Anglais", "Français", "Paris"]},
+    )
+    assert result == "Paris"
+
+
+def test_extract_job_title_finds_french_retail_title():
+    header = "Keo PEN\nVendeur Conseiller client\npen.keoh@gmail.com"
+    assert _extract_job_title(header) == "Vendeur Conseiller client"
+
+
+def test_extract_job_title_finds_conseiller():
+    header = "Marie Dupont\nConseillère commerciale\nmarie@example.com"
+    assert _extract_job_title(header) == "Conseillère commerciale"
+
+
+def test_detect_sections_maps_qualite_to_skills():
+    cv = "Keo PEN\n\nEXPERIENCE\nVendeur SANDRO 2024\n\nQUALITÉ\nAutonome\nRigoureux\n"
+    sections = _detect_sections(cv)
+    assert "skills" in sections
+    assert "Autonome" in sections["skills"]
+
+
+def test_detect_sections_maps_passion_to_interests():
+    cv = "Keo PEN\n\nEXPERIENCE\nVendeur SANDRO 2024\n\nPASSION\nMusique\nSport\n"
+    sections = _detect_sections(cv)
+    assert "interests" in sections
+    assert "Musique" in sections["interests"]
+
+
+def test_detect_sections_passion_not_in_experience():
+    cv = "Keo PEN\n\nEXPERIENCE\nVendeur SANDRO 2024\n\nPASSION\nMusique\nSport\n"
+    sections = _detect_sections(cv)
+    assert "Musique" not in sections.get("experience", "")
+
+
 @pytest.fixture(scope="module")
 def pipeline():
     return NLPPipeline()

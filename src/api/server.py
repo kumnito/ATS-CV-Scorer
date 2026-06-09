@@ -8,13 +8,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.core.config import settings
 from src.core.schemas import ATSResponse, RankedJobMatch
 from src.services.claude_feedback import ClaudeFeedback
+from src.services.cv_transformer import CVTransformer
 from src.services.job_matcher import find_matching_jobs
 from src.services.job_search import JobSearchService
 from src.services.nlp_pipeline import NLPPipeline
-from src.services.pdf_extractor import PDFExtractor
 from src.services.semantic_scorer import SemanticScorer
 
-app = FastAPI(title="ATS CV Scorer API", version="0.1.0")
+app = FastAPI(title="ATS CV Scorer API", version="0.2.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -22,7 +22,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_pdf_extractor = PDFExtractor()
+_cv_transformer = CVTransformer()
 _nlp_pipeline = NLPPipeline()
 _semantic_scorer = SemanticScorer()
 _job_search_service = JobSearchService(
@@ -59,13 +59,11 @@ async def score_cv(
         tmp_path = tmp.name
 
     try:
-        cv_text = _pdf_extractor.extract(tmp_path)
-        if not cv_text:
-            raise HTTPException(
-                status_code=422, detail="Could not extract text from PDF."
-            )
+        normalized_cv = _cv_transformer.transform(tmp_path)
+        if not normalized_cv.raw_text:
+            raise HTTPException(status_code=422, detail="Could not extract text from PDF.")
 
-        parsed_cv = _nlp_pipeline.parse_cv(cv_text)
+        parsed_cv = _nlp_pipeline.parse_normalized(normalized_cv)
         scoring_result = _semantic_scorer.score(parsed_cv, job_description)
 
         if include_feedback and settings.anthropic_api_key:
@@ -104,13 +102,11 @@ async def find_jobs(
         tmp_path = tmp.name
 
     try:
-        cv_text = _pdf_extractor.extract(tmp_path)
-        if not cv_text:
-            raise HTTPException(
-                status_code=422, detail="Could not extract text from PDF."
-            )
+        normalized_cv = _cv_transformer.transform(tmp_path)
+        if not normalized_cv.raw_text:
+            raise HTTPException(status_code=422, detail="Could not extract text from PDF.")
 
-        parsed_cv = _nlp_pipeline.parse_cv(cv_text)
+        parsed_cv = _nlp_pipeline.parse_normalized(normalized_cv)
         return find_matching_jobs(
             parsed_cv, _job_search_service, _semantic_scorer, max_results=max_results
         )

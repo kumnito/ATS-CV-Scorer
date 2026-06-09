@@ -7,8 +7,10 @@ from src.services.nlp_pipeline import (
     _estimate_experience_years,
     _extract_job_title,
     _extract_location,
+    _extract_sector,
     _extract_skills,
 )
+from src.core.schemas import NormalizedCV, CVExperience
 
 SAMPLE_CV = """John Doe
 john@example.com | +33 6 00 00 00 00
@@ -224,3 +226,118 @@ def test_parse_cv_extracts_job_title_and_location(pipeline):
     parsed = pipeline.parse_cv(cv_text)
     assert parsed.job_title == "ML Engineer Junior"
     assert parsed.location == "Paris"
+
+
+# ---------------------------------------------------------------------------
+# Proposition A — fallback experience[0].title dans parse_normalized
+# ---------------------------------------------------------------------------
+
+def test_parse_normalized_uses_experience_title_when_header_title_missing(pipeline):
+    """Quand header.title est None, le titre de la première expérience est utilisé."""
+    from src.core.schemas import CVExperience, CVHeader, NormalizedCV
+
+    cv = NormalizedCV(
+        header=CVHeader(name="Keo PEN"),  # pas de title
+        experience=[
+            CVExperience(title="Conseiller de vente", company="Sandro"),
+        ],
+        raw_text="Conseiller de vente Sandro service client vente",
+    )
+    parsed = pipeline.parse_normalized(cv)
+    assert parsed.job_title == "Conseiller de vente"
+
+
+def test_parse_normalized_prefers_header_title_over_experience_title(pipeline):
+    """header.title prend la priorité sur experience[0].title si défini."""
+    from src.core.schemas import CVExperience, CVHeader, NormalizedCV
+
+    cv = NormalizedCV(
+        header=CVHeader(name="Jean Dupont", title="Data Analyst"),
+        experience=[
+            CVExperience(title="Développeur logiciel", company="Acme"),
+        ],
+        raw_text="Data Analyst python pandas sql",
+    )
+    parsed = pipeline.parse_normalized(cv)
+    assert parsed.job_title == "Data Analyst"
+
+
+# ---------------------------------------------------------------------------
+# Proposition C — détection des compétences commerce
+# ---------------------------------------------------------------------------
+
+def test_extract_skills_detects_retail_commerce_skills():
+    """Les skills du domaine commerce (vente, service client…) sont détectées."""
+    retail_text = (
+        "Conseiller de vente — Boutique mode\n"
+        "Accueil clientèle, vente, service client, encaissement, inventaire.\n"
+        "Maîtrise du merchandising et fidélisation des clients."
+    )
+    skills = _extract_skills(retail_text)
+    assert "vente" in skills
+    assert "service client" in skills
+    assert "merchandising" in skills
+    assert "encaissement" in skills
+
+
+def test_parse_normalized_includes_commerce_skills_for_retail_cv(pipeline):
+    """Un CV retail doit avoir des compétences commerce dans ParsedCV.skills."""
+    from src.core.schemas import CVExperience, CVHeader, CVSkills, NormalizedCV
+
+    cv = NormalizedCV(
+        header=CVHeader(name="Keo PEN", title="Conseiller de vente"),
+        experience=[CVExperience(title="Conseiller de vente", company="Sandro")],
+        skills=CVSkills(commerce=["vente", "service client", "merchandising"]),
+        raw_text="vente service client merchandising encaissement",
+    )
+    parsed = pipeline.parse_normalized(cv)
+    assert "vente" in parsed.skills
+    assert "service client" in parsed.skills
+
+
+# ---------------------------------------------------------------------------
+# _extract_sector
+# ---------------------------------------------------------------------------
+
+def test_extract_sector_from_experience_keywords():
+    cv = NormalizedCV(
+        experience=[CVExperience(title="Conseiller de vente", bullets=["gestion du magasin", "stock"])]
+    )
+    assert _extract_sector(cv) == "magasin"
+
+
+def test_extract_sector_mode_from_company_context():
+    cv = NormalizedCV(
+        experience=[CVExperience(title="Vendeur", company="Sandro", bullets=["collection mode", "textile"])]
+    )
+    assert _extract_sector(cv) == "mode"
+
+
+def test_extract_sector_transport_from_bullets():
+    cv = NormalizedCV(
+        experience=[CVExperience(title="Chauffeur", bullets=["livraison de colis", "transport routier"])]
+    )
+    assert _extract_sector(cv) == "transport"
+
+
+def test_extract_sector_returns_none_when_no_match():
+    cv = NormalizedCV(
+        experience=[CVExperience(title="ML Engineer", company="Google", bullets=["deep learning", "python"])]
+    )
+    assert _extract_sector(cv) is None
+
+
+def test_extract_sector_returns_none_with_no_experience():
+    assert _extract_sector(NormalizedCV()) is None
+
+
+def test_parse_normalized_sets_sector_field(pipeline):
+    from src.core.schemas import CVHeader, CVSkills
+
+    cv = NormalizedCV(
+        header=CVHeader(name="Test", title="Vendeur"),
+        experience=[CVExperience(title="Vendeur", company="Auchan", bullets=["grande distribution", "magasin"])],
+        raw_text="Vendeur Auchan magasin grande distribution",
+    )
+    parsed = pipeline.parse_normalized(cv)
+    assert parsed.sector == "magasin"

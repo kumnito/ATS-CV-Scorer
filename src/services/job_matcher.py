@@ -1,5 +1,8 @@
 import re
+from dataclasses import dataclass
+from typing import Optional
 
+from src.core.lexicons import JOB_TITLE_RE, JOB_TITLE_SYNONYMS
 from src.core.schemas import ParsedCV, RankedJobMatch
 from src.services.job_search import JobSearchService
 from src.services.semantic_scorer import SemanticScorer
@@ -38,14 +41,79 @@ FRANCE_REGIONS: list[str] = [
 # nationwide.
 _CV_LOCATION_RADIUS_KM = 30
 
+# Offers scoring below this threshold are considered low-quality matches.
+_MIN_SCORE_THRESHOLD = 25.0
+
+# If fewer than this many offers pass the threshold, signal the UI to show
+# a "few results" warning inviting the user to broaden their search.
+_FEW_RESULTS_THRESHOLD = 3
+
+
+@dataclass
+class JobSearchResult:
+    matches: list[RankedJobMatch]
+    queries_used: list[str]
+    location_used: Optional[str]
+    few_results: bool = False
+
+
+def _trim_title_for_query(title: str) -> str:
+    """Drop trailing company name from a job title string.
+
+    Keeps words up to the last job-title keyword + 2 following words, which
+    covers most patterns like "Conseiller de vente Sandro" → "Conseiller de
+    vente" or "ML Engineer ACME Corp" → "ML Engineer ACME" (acceptable).
+    Falls back to the full title if no keyword is found.
+    """
+    words = title.split()
+    last_kw = max(
+        (i for i, w in enumerate(words) if JOB_TITLE_RE.search(w)),
+        default=len(words) - 1,
+    )
+    return " ".join(words[: last_kw + 3])
+
 
 def _build_query(parsed_cv: ParsedCV) -> str:
     if parsed_cv.job_title:
         cleaned = _SENIORITY_RE.sub("", parsed_cv.job_title)
-        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        cleaned = _trim_title_for_query(re.sub(r"\s+", " ", cleaned).strip())
         if cleaned:
             return cleaned
     return " ".join(parsed_cv.skills[:3])
+
+
+def _find_synonym_queries(title: str) -> list[str]:
+    """Return up to 2 alternative queries from JOB_TITLE_SYNONYMS for the given title."""
+    title_lower = title.lower()
+    for canonical, synonyms in JOB_TITLE_SYNONYMS.items():
+        if canonical in title_lower or any(s in title_lower for s in synonyms):
+            return [t for t in [canonical] + synonyms if t.lower() not in title_lower][:2]
+    return []
+
+
+def _build_queries(parsed_cv: ParsedCV) -> list[str]:
+    """Build 1–3 query variants: base title, synonym, and/or title+sector."""
+    base = _build_query(parsed_cv)
+    if not base:
+        return []
+
+    queries = [base]
+
+    # Synonym variant — diversifies beyond the exact extracted title
+    if parsed_cv.job_title:
+        alts = _find_synonym_queries(parsed_cv.job_title)
+        if alts and alts[0] not in queries:
+            queries.append(alts[0])
+
+    # Sector-enriched variant — only when the sector word is not already in base
+    if parsed_cv.sector and parsed_cv.job_title and parsed_cv.sector.lower() not in base.lower():
+        cleaned = _SENIORITY_RE.sub("", parsed_cv.job_title)
+        trimmed = _trim_title_for_query(re.sub(r"\s+", " ", cleaned).strip())
+        enriched = f"{trimmed} {parsed_cv.sector}".strip()
+        if enriched and enriched not in queries:
+            queries.append(enriched)
+
+    return queries[:3]
 
 
 def find_matching_jobs(
@@ -54,40 +122,63 @@ def find_matching_jobs(
     scorer: SemanticScorer,
     max_results: int = 20,
     region: str | None = None,
-) -> list[RankedJobMatch]:
-    query = _build_query(parsed_cv)
-    if not query.strip():
-        return []
+) -> JobSearchResult:
+    queries = _build_queries(parsed_cv)
+    if not queries:
+        return JobSearchResult(matches=[], queries_used=[], location_used=None)
 
-    listings: list = []
+    # Determine location and distance for Adzuna
+    location_used: Optional[str] = None
+    distance: Optional[int] = None
     if region:
         # User's explicit region always takes priority — avoids Adzuna
         # geocoding ambiguous city names (e.g. "Croix" → Pont-Croix/Finistère
         # instead of Croix/59 near Lille) regardless of whether the city
         # search would return results.
-        listings = job_search.search(
-            query=query, location=region, max_results=max_results
-        )
+        location_used = region
     elif parsed_cv.location:
         # Include postal code when available for precise Adzuna geocoding:
         # "59170 Croix" is unambiguous, "Croix" alone is not.
-        where = (
+        location_used = (
             f"{parsed_cv.postal_code} {parsed_cv.location}".strip()
             if parsed_cv.postal_code
             else parsed_cv.location
         )
+        distance = _CV_LOCATION_RADIUS_KM
+    else:
+        return JobSearchResult(matches=[], queries_used=queries, location_used=None)
+
+    # Run each query and collect unique listings by URL
+    results_per_query = max(5, max_results // len(queries))
+    seen_urls: set[str] = set()
+    all_listings = []
+
+    for query in queries:
         listings = job_search.search(
             query=query,
-            location=where,
-            distance=_CV_LOCATION_RADIUS_KM,
-            max_results=max_results,
+            location=location_used,
+            distance=distance,
+            max_results=results_per_query,
         )
+        for listing in listings:
+            if listing.url not in seen_urls:
+                seen_urls.add(listing.url)
+                all_listings.append(listing)
 
-    matches = [
-        RankedJobMatch(
-            job=listing, scoring_result=scorer.score(parsed_cv, listing.description)
-        )
-        for listing in listings
+    # Score all unique listings and sort by relevance
+    scored = [
+        RankedJobMatch(job=l, scoring_result=scorer.score(parsed_cv, l.description))
+        for l in all_listings
     ]
-    matches.sort(key=lambda m: m.scoring_result.overall_score, reverse=True)
-    return matches
+    scored.sort(key=lambda m: m.scoring_result.overall_score, reverse=True)
+
+    # Filter by minimum quality threshold — return all as fallback if none pass
+    filtered = [m for m in scored if m.scoring_result.overall_score >= _MIN_SCORE_THRESHOLD]
+    few_results = bool(scored) and len(filtered) < _FEW_RESULTS_THRESHOLD
+
+    return JobSearchResult(
+        matches=filtered if filtered else scored,
+        queries_used=queries,
+        location_used=location_used,
+        few_results=few_results,
+    )

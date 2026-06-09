@@ -195,6 +195,7 @@ def on_cv_upload(cv_file):
         None, None, None,    # parsed_cv_state, normalized_cv_state, quality_report_state
         "⚠️ Uploadez votre CV en onglet 1 pour commencer.",  # cv_context_md
         gr.update(interactive=False),                         # search_btn
+        gr.update(value=""),                                  # job_title_input
     )
 
     if cv_file is None:
@@ -208,6 +209,7 @@ def on_cv_upload(cv_file):
             None, None, None,
             "❌ Échec de l'extraction PDF — vérifiez que le fichier n'est pas protégé.",
             gr.update(interactive=False),
+            gr.update(value=""),
         )
 
     parsed_cv = _nlp_pipeline.parse_normalized(normalized_cv)
@@ -222,6 +224,7 @@ def on_cv_upload(cv_file):
         quality_report,
         _format_cv_context_strip(parsed_cv, quality_report),
         gr.update(interactive=True),
+        gr.update(value=parsed_cv.job_title or ""),
     )
 
 
@@ -231,6 +234,7 @@ def on_cv_clear():
         None, None, None,
         "⚠️ Uploadez votre CV en onglet 1 pour commencer.",
         gr.update(interactive=False),
+        gr.update(value=""),
     )
 
 
@@ -282,19 +286,37 @@ def _slot_updates(rank: int | None = None, match=None):
     ]
 
 
-def on_search(parsed_cv, region):
+def on_search(parsed_cv, region, title_override):
     if parsed_cv is None:
         status = "⚠️ Uploadez d'abord votre CV en onglet 1."
-        return [status, []] + _empty_job_slots()
+        return [status, [], ""] + _empty_job_slots()
 
-    matches = find_matching_jobs(
+    # Apply user's title override before searching
+    if title_override and title_override.strip():
+        parsed_cv = parsed_cv.model_copy(update={"job_title": title_override.strip()})
+
+    result = find_matching_jobs(
         parsed_cv,
         _job_search_service,
         _semantic_scorer,
         max_results=MAX_JOB_RESULTS,
         region=region or None,
     )
+    matches = result.matches
 
+    # Build the query display line
+    query_display = ""
+    if result.queries_used:
+        main_q = result.queries_used[0]
+        query_display = f'🔍 Requête Adzuna : **"{main_q}"**'
+        if len(result.queries_used) > 1:
+            extras = ", ".join(f'"{q}"' for q in result.queries_used[1:])
+            query_display += f" · variantes : {extras}"
+        if result.location_used:
+            loc_radius = " (30 km)" if parsed_cv.location and not region else ""
+            query_display += f" · 📍 {result.location_used}{loc_radius}"
+
+    # Build the profile summary line for the status header
     if region:
         profile_line = f"**Profil :** {parsed_cv.job_title or '_non déterminé_'} · 🗺️ {region}"
     else:
@@ -307,10 +329,17 @@ def on_search(parsed_cv, region):
             )
             profile_line += f" · 📍 {loc_display} (rayon 30 km)"
 
+    few_results_note = (
+        "\n\n⚠️ Peu d'offres correspondantes trouvées — "
+        "essayez d'élargir le rayon géographique ou de préciser votre titre de poste."
+        if result.few_results
+        else ""
+    )
+
     if matches:
         status = (
             f"## ✅ {len(matches)} offre(s) trouvée(s), classées par score de compatibilité décroissant\n"
-            f"{profile_line}"
+            f"{profile_line}{few_results_note}"
         )
     else:
         status = (
@@ -319,7 +348,7 @@ def on_search(parsed_cv, region):
             "vos **compétences clés** et votre **ville**, ou réessayez un peu plus tard."
         )
 
-    outputs = [status, matches]
+    outputs = [status, matches, query_display]
     for i in range(MAX_JOB_RESULTS):
         outputs += _slot_updates(rank=i + 1, match=matches[i]) if i < len(matches) else _slot_updates()
     return outputs
@@ -399,11 +428,16 @@ with gr.Blocks(
             )
             cv_context_md = gr.Markdown("⚠️ Uploadez votre CV en onglet 1 pour commencer.")
             with gr.Row():
+                job_title_input = gr.Textbox(
+                    label="Intitulé de poste (modifiable avant la recherche)",
+                    placeholder="ex. Vendeur, Data Scientist, Développeur Python…",
+                    scale=2,
+                )
                 region_dropdown = gr.Dropdown(
                     choices=FRANCE_REGIONS,
-                    label="Région (prioritaire si sélectionnée — remplace la localisation du CV pour la recherche Adzuna)",
+                    label="Région (prioritaire si sélectionnée — remplace la localisation du CV)",
                     value=None,
-                    scale=3,
+                    scale=2,
                 )
                 search_btn = gr.Button(
                     "🔍 Rechercher des offres correspondantes",
@@ -411,6 +445,7 @@ with gr.Blocks(
                     interactive=False,
                     scale=1,
                 )
+            search_query_md = gr.Markdown()
             search_status_md = gr.Markdown()
 
             job_slots = []
@@ -434,18 +469,19 @@ with gr.Blocks(
         quality_report_state,
         cv_context_md,
         search_btn,
+        job_title_input,
     ]
 
     cv_input.upload(fn=on_cv_upload, inputs=[cv_input], outputs=_upload_outputs)
     cv_input.clear(fn=on_cv_clear, outputs=_upload_outputs)
 
-    _search_outputs = [search_status_md, matches_state]
+    _search_outputs = [search_status_md, matches_state, search_query_md]
     for group, job_md, slot_analyze_btn, slot_feedback_md in job_slots:
         _search_outputs += [group, job_md, slot_analyze_btn, slot_feedback_md]
 
     search_btn.click(
         fn=on_search,
-        inputs=[parsed_cv_state, region_dropdown],
+        inputs=[parsed_cv_state, region_dropdown, job_title_input],
         outputs=_search_outputs,
     )
 

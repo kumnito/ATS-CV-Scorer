@@ -1,4 +1,4 @@
-.PHONY: install run dev test lint format clean
+.PHONY: install run dev test lint format clean update-lexicons
 
 VENV := .venv
 PYTHON := $(VENV)/bin/python
@@ -25,6 +25,9 @@ lint: install
 
 format: install
 	$(VENV)/bin/ruff format src/ tests/
+
+update-lexicons: install
+	$(PYTHON) -m src.services.lexicon_builder --force
 
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} +

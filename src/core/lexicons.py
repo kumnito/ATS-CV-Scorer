@@ -1,6 +1,13 @@
-"""Shared NLP lexicons — imported by cv_transformer and nlp_pipeline."""
+"""Shared NLP lexicons — imported by cv_transformer and nlp_pipeline.
 
+Hardcoded entries are always authoritative. If lexicons_generated.json exists
+(produced by `make update-lexicons`), its entries are merged in at import time
+with hardcoded entries taking priority — no regressions possible.
+"""
+
+import json
 import re
+from pathlib import Path
 
 SECTION_HEADERS: dict[str, str] = {
     "summary": r"^(summary|objective|profile|about me|professional summary|career objective|executive summary|about|profil|accroche|résumé|présentation|à propos)",
@@ -13,6 +20,7 @@ SECTION_HEADERS: dict[str, str] = {
     "interests": r"^(interests?|hobbies?|passions?|personal interests?|loisirs?|centres? d'intérêts?|activités? extra-professionnelles?|vie extra-professionnelle)",
 }
 
+# Mutable — extended at import time by _merge_generated() if lexicons_generated.json exists.
 SKILL_CATEGORIES: dict[str, list[str]] = {
     "ml": [
         "tensorflow",
@@ -136,20 +144,20 @@ SKILL_CATEGORIES: dict[str, list[str]] = {
         "streamlit",
         "gradio",
     ],
-}
-
-# Flat set of all skills across all categories (for backward-compatible keyword matching).
-_ALL_SKILLS_SET: set[str] = {s.lower() for cat in SKILL_CATEGORIES.values() for s in cat}
-ALL_SKILLS: list[str] = sorted(_ALL_SKILLS_SET)
-
-# Kept for backward compatibility — nlp_pipeline used this dict structure.
-TECH_SKILLS: dict[str, list[str]] = {
-    "ml": SKILL_CATEGORIES["ml"],
-    "mlops": SKILL_CATEGORIES["mlops"],
-    "cloud": SKILL_CATEGORIES["cloud"],
-    "languages": SKILL_CATEGORIES["languages"],
-    "data": SKILL_CATEGORIES["data"],
-    "other": SKILL_CATEGORIES["other"],
+    "commerce": [
+        # Activités commerciales (FR)
+        "vente", "merchandising", "prospection", "négociation",
+        "fidélisation", "encaissement",
+        # Relation / service client (FR)
+        "service client", "relation client", "conseil client",
+        # Gestion opérationnelle (FR)
+        "gestion de stock", "inventaire", "réassort",
+        # English equivalents (offres Adzuna souvent en anglais)
+        "sales", "customer service", "retail", "cashier",
+        "inventory management",
+        # Outils transverses
+        "crm", "pos",
+    ],
 }
 
 JOB_TITLE_KEYWORDS: list[str] = [
@@ -209,11 +217,32 @@ JOB_TITLE_KEYWORDS: list[str] = [
     "livreur",
     "agent",
     "chargée",
+    "conducteur",
+    "conductrice",
+    "chauffeur",
+    "chauffeure",
+    "exploitant",
 ]
 
-JOB_TITLE_RE = re.compile(
-    r"\b(" + "|".join(JOB_TITLE_KEYWORDS) + r")\b", re.IGNORECASE
-)
+# Hardcoded base action-verb sets (mutable — _merge_generated() may extend them).
+_ACTION_VERBS_EN_BASE: set[str] = {
+    "led", "built", "designed", "developed", "implemented", "optimized",
+    "automated", "deployed", "architected", "mentored", "delivered",
+    "reduced", "increased", "launched", "created", "managed", "improved",
+    "established", "coordinated", "negotiated", "supervised", "trained",
+    "analyzed", "engineered", "integrated", "migrated", "refactored",
+    "streamlined", "accelerated", "achieved", "drove", "transformed",
+    "scaled", "secured", "maintained", "produced", "published",
+}
+
+_ACTION_VERBS_FR_BASE: set[str] = {
+    "dirigé", "conçu", "développé", "implémenté", "optimisé", "automatisé",
+    "déployé", "architecturé", "encadré", "livré", "réduit", "augmenté",
+    "lancé", "piloté", "géré", "amélioré", "établi", "coordonné",
+    "supervisé", "formé", "analysé", "intégré", "migré", "refactorisé",
+    "accéléré", "réalisé", "transformé", "sécurisé", "maintenu", "produit",
+    "créé", "mis en place", "assuré", "accompagné", "structuré",
+}
 
 PERSON_NAME_RE = re.compile(r"^[A-Z][A-Za-zà-öù-ÿ'-]+$")
 
@@ -233,7 +262,6 @@ YEAR_RANGE_RE = re.compile(
 )
 
 # Words that spaCy (en_core_web_sm) frequently misclassifies as GPE/LOC on French CVs.
-# Used by nlp_pipeline._extract_location to filter NER false positives.
 LOCATION_BLOCKLIST: frozenset[str] = frozenset({
     # Language names / demonyms
     "français", "anglais", "espagnol", "allemand", "italien", "portugais",
@@ -248,30 +276,6 @@ LOCATION_BLOCKLIST: frozenset[str] = frozenset({
     "mobile", "permis",
 })
 
-# Action verbs for quality scoring
-ACTION_VERBS_EN: frozenset[str] = frozenset(
-    {
-        "led", "built", "designed", "developed", "implemented", "optimized",
-        "automated", "deployed", "architected", "mentored", "delivered",
-        "reduced", "increased", "launched", "created", "managed", "improved",
-        "established", "coordinated", "negotiated", "supervised", "trained",
-        "analyzed", "engineered", "integrated", "migrated", "refactored",
-        "streamlined", "accelerated", "achieved", "drove", "transformed",
-        "scaled", "secured", "maintained", "produced", "published",
-    }
-)
-
-ACTION_VERBS_FR: frozenset[str] = frozenset(
-    {
-        "dirigé", "conçu", "développé", "implémenté", "optimisé", "automatisé",
-        "déployé", "architecturé", "encadré", "livré", "réduit", "augmenté",
-        "lancé", "piloté", "géré", "amélioré", "établi", "coordonné",
-        "supervisé", "formé", "analysé", "intégré", "migré", "refactorisé",
-        "accéléré", "réalisé", "transformé", "sécurisé", "maintenu", "produit",
-        "créé", "mis en place", "dirigé", "assuré", "accompagné", "structuré",
-    }
-)
-
 # Regex patterns for metric/quantified achievement detection
 METRIC_PATTERNS: list[re.Pattern] = [
     re.compile(r"\d+\s*%"),
@@ -281,5 +285,99 @@ METRIC_PATTERNS: list[re.Pattern] = [
     re.compile(r"\b(increased|decreased|reduced|improved|grew|saved|generated|delivered)\b.{0,60}\d+", re.IGNORECASE),
     re.compile(r"\b(augmenté|réduit|amélioré|généré|économisé|livré)\b.{0,60}\d+", re.IGNORECASE),
     re.compile(r"\d+\s*(ms|seconds?|minutes?|hours?|days?|ms|heures?|jours?)\b", re.IGNORECASE),
-    re.compile(r"\d+\s*k\b|\d{4,}"),  # "50k" or large numbers (5000+)
+    re.compile(r"\d+\s*k\b|\d{4,}"),
 ]
+
+# Job title synonyms — maps a canonical title fragment to alternative search terms.
+# Used by job_matcher._build_queries() to diversify Adzuna queries.
+JOB_TITLE_SYNONYMS: dict[str, list[str]] = {
+    "vendeur": ["conseiller de vente", "commercial terrain", "chargé de clientèle", "attaché commercial"],
+    "développeur": ["software engineer", "ingénieur logiciel", "programmeur"],
+    "data scientist": ["ml engineer", "ingénieur machine learning", "analyste data"],
+    "conducteur": ["chauffeur", "transporteur", "livreur"],
+    "opérateur": ["technicien de production", "agent de fabrication", "conducteur de ligne"],
+}
+
+# Sector keywords — maps keyword lists to a sector label added to Adzuna queries.
+# Scanned against experience text (titles + company + bullets) for sector enrichment.
+SECTOR_KEYWORDS: list[tuple[list[str], str]] = [
+    (["magasin", "boutique", "grande distribution", "supermarché", "hypermarché", "enseigne"], "magasin"),
+    (["mode", "textile", "prêt-à-porter", "habillement", "collection", "luxe", "maroquinerie"], "mode"),
+    (["restauration", "restaurant", "cuisine", "hôtellerie", "fast-food", "café"], "restauration"),
+    (["transport", "livraison", "logistique", "chauffeur", "fret", "supply chain"], "transport"),
+    (["production", "fabrication", "industrie", "usine", "atelier", "manufacture"], "industrie"),
+    (["btp", "chantier", "construction", "bâtiment", "travaux"], "btp"),
+    (["santé", "médical", "hôpital", "soins", "infirmier", "clinique", "pharmacie"], "santé"),
+    (["banque", "finance", "assurance", "comptabilité", "audit"], "finance"),
+]
+
+# Full occupation titles from ESCO (populated by _merge_generated if available).
+# Distinct from JOB_TITLE_KEYWORDS — these are complete titles, not regex keywords.
+JOB_TITLES: list[str] = []
+
+
+# ---------------------------------------------------------------------------
+# Merge generated lexicons at import time (silent fallback if file absent)
+# ---------------------------------------------------------------------------
+
+def _merge_generated() -> tuple[list[str], list[str]]:
+    """Load lexicons_generated.json and merge into module-level structures.
+
+    Returns (extra_verbs_en, extra_verbs_fr) — new verbs not already in the
+    hardcoded base sets, to be unioned into the final ACTION_VERBS frozensets.
+    """
+    _path = Path(__file__).parent.parent.parent / "lexicons_generated.json"
+    if not _path.exists():
+        return [], []
+    try:
+        data = json.loads(_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return [], []
+
+    # Skills: extend each category with generated entries not in hardcoded set.
+    hardcoded_skills: set[str] = {
+        s.lower() for cat in SKILL_CATEGORIES.values() for s in cat
+    }
+    for cat, skills in data.get("skill_categories", {}).items():
+        bucket = SKILL_CATEGORIES.setdefault(cat, [])
+        for s in skills:
+            s_low = s.lower()
+            if s_low not in hardcoded_skills:
+                bucket.append(s)
+                hardcoded_skills.add(s_low)
+
+    # Full job titles (occupation names from ESCO, not keywords).
+    for title in data.get("job_titles", []):
+        if title not in JOB_TITLES:
+            JOB_TITLES.append(title)
+
+    extra_en = [
+        v.lower() for v in data.get("action_verbs_en", [])
+        if v.lower() not in _ACTION_VERBS_EN_BASE
+    ]
+    extra_fr = [
+        v.lower() for v in data.get("action_verbs_fr", [])
+        if v.lower() not in _ACTION_VERBS_FR_BASE
+    ]
+    return extra_en, extra_fr
+
+
+_extra_verbs_en, _extra_verbs_fr = _merge_generated()
+
+# ---------------------------------------------------------------------------
+# Derived symbols — must be computed AFTER _merge_generated() has run
+# ---------------------------------------------------------------------------
+
+# Flat set of all skills across all categories (for backward-compatible keyword matching).
+_ALL_SKILLS_SET: set[str] = {s.lower() for cat in SKILL_CATEGORIES.values() for s in cat}
+ALL_SKILLS: list[str] = sorted(_ALL_SKILLS_SET)
+
+# Kept for backward compatibility — nlp_pipeline used this dict structure.
+TECH_SKILLS: dict[str, list[str]] = {k: v for k, v in SKILL_CATEGORIES.items()}
+
+JOB_TITLE_RE = re.compile(
+    r"\b(" + "|".join(JOB_TITLE_KEYWORDS) + r")\b", re.IGNORECASE
+)
+
+ACTION_VERBS_EN: frozenset[str] = frozenset(_ACTION_VERBS_EN_BASE | set(_extra_verbs_en))
+ACTION_VERBS_FR: frozenset[str] = frozenset(_ACTION_VERBS_FR_BASE | set(_extra_verbs_fr))

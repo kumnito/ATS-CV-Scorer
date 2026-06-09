@@ -12,6 +12,7 @@ from src.core.lexicons import (
     POSTAL_CODE_CITY_RE,
     PROPER_NOUN_RUN_RE,
     SECTION_HEADERS,
+    SECTOR_KEYWORDS,
     TECH_SKILLS,
     TITLE_SPLIT_RE,
     YEAR_RANGE_RE,
@@ -69,9 +70,17 @@ class NLPPipeline:
         else:
             exp_years = _estimate_experience_years(sections.get("experience", ""))
 
-        job_title = normalized_cv.header.title or _extract_job_title(sections.get("header", ""))
+        job_title = (
+            normalized_cv.header.title
+            # Most recent experience title is cleaner than header title for CVs
+            # where the header line mixes the title and the company name without
+            # a separator (e.g. "Conseiller de vente Sandro").
+            or (normalized_cv.experience[0].title if normalized_cv.experience else None)
+            or _extract_job_title(sections.get("header", ""))
+        )
         location = normalized_cv.header.location or _extract_location(sections.get("header", ""), entities)
         postal_code = normalized_cv.header.postal_code
+        sector = _extract_sector(normalized_cv)
 
         return ParsedCV(
             raw_text=cleaned,
@@ -83,10 +92,25 @@ class NLPPipeline:
             job_title=job_title,
             location=location,
             postal_code=postal_code,
+            sector=sector,
         )
 
 
 # --- helpers (module-level for testability) ---
+
+
+def _extract_sector(normalized_cv: NormalizedCV) -> Optional[str]:
+    """Detect professional sector from experience entries (titles, company, bullets)."""
+    if not normalized_cv.experience:
+        return None
+    experience_text = " ".join(
+        " ".join(filter(None, [e.title, e.company] + list(e.bullets)))
+        for e in normalized_cv.experience
+    ).lower()
+    for keywords, sector in SECTOR_KEYWORDS:
+        if any(kw in experience_text for kw in keywords):
+            return sector
+    return None
 
 
 def _clean_text(text: str) -> str:

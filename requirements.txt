@@ -29,3 +29,6 @@ scikit-learn==1.5.2
 
 # Dev & tests
 pytest==8.3.4
+
+# Lexicon builder — HuggingFace dataset source (make update-lexicons)
+datasets>=2.0

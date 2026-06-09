@@ -115,6 +115,7 @@ class _Line:
 class _LayoutInfo:
     layout_type: str  # "single_column" | "two_columns"
     gutter_x: Optional[float] = None  # x position of column split
+    body_y_start: float = 0.0  # y au-dessus duquel c'est l'en-tête (bandeau coloré)
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +177,24 @@ class CVTransformer:
                 "postal_code": _extract_postal_code_from_text(raw_text),
             })
         summary = _lines_to_raw_text(section_map.get("summary", [])).strip() or None
+
+        # Quand il n'y a pas de section "summary" explicite, extraire l'accroche
+        # depuis les lignes de l'en-tête : une ligne longue (> 60 chars, > 8 mots)
+        # qui n'est pas une coordonnée de contact est probablement l'accroche.
+        if not summary:
+            _hdr_lines = section_map.get("header", [])
+            _accroche = [
+                l for l in _hdr_lines
+                if len(l.text.strip()) > 60
+                and len(l.text.split()) > 8
+                and not _EMAIL_RE.search(l.text)
+                and not _PHONE_RE.search(l.text)
+                and not _GITHUB_RE.search(l.text)
+                and not _LINKEDIN_RE.search(l.text)
+                and not _URL_RE.search(l.text)
+                and not POSTAL_CODE_CITY_RE.search(l.text)
+            ]
+            summary = _lines_to_raw_text(_accroche).strip() or None
         skills = self._parse_skills(raw_text)
         experience = self._parse_experience(section_map.get("experience", []))
         education = self._parse_education(section_map.get("education", []))
@@ -232,29 +251,27 @@ class CVTransformer:
         if page_width <= 0:
             return _LayoutInfo("single_column")
 
-        # Collect x0 of the leftmost word on each detected line (per page).
-        line_starts: list[float] = []
-        for page_words in words_per_page:
-            if not page_words:
-                continue
-            sorted_words = sorted(page_words, key=lambda w: w["top"])
-            current_group: list[float] = [sorted_words[0]["x0"]]
-            current_top: float = sorted_words[0]["top"]
-            for w in sorted_words[1:]:
-                if abs(w["top"] - current_top) <= 3:
-                    current_group.append(w["x0"])
-                else:
-                    line_starts.append(min(current_group))
-                    current_group = [w["x0"]]
-                    current_top = w["top"]
-            line_starts.append(min(current_group))
+        # Exclure le bandeau d'en-tête (≈ 20 % supérieurs de la page) pour éviter
+        # que les wraps de l'accroche (qui s'étendent loin vers la droite dans la
+        # colonne gauche) ne biaisent le calcul du gutter.
+        page_height = max((w.get("bottom") or w["top"] + 12) for w in all_words)
+        body_y_start = 0.20 * page_height
 
-        if len(line_starts) < 5:
+        # Utiliser les x0 de TOUS les mots du corps (pas seulement les débuts de
+        # ligne) pour avoir une distribution fidèle de la répartition horizontale.
+        body_x0s: list[float] = [
+            w["x0"]
+            for page in words_per_page
+            for w in page
+            if w["top"] > body_y_start
+        ]
+
+        if len(body_x0s) < 5:
             return _LayoutInfo("single_column")
 
-        # Look for the largest gap in x0 values within the central zone.
-        lo, hi = 0.15 * page_width, 0.75 * page_width
-        central_starts = sorted(set(round(x, 1) for x in line_starts if lo <= x <= hi))
+        # Chercher le plus grand gap dans la zone centrale [15 %, 85 %] de la page.
+        lo, hi = 0.15 * page_width, 0.85 * page_width
+        central_starts = sorted(set(round(x, 1) for x in body_x0s if lo <= x <= hi))
         if len(central_starts) < 2:
             return _LayoutInfo("single_column")
 
@@ -267,13 +284,17 @@ class CVTransformer:
         if max_gap < 25:
             return _LayoutInfo("single_column")
 
+        # Utiliser la moyenne du gap.  Les wraps larges dans la zone d'en-tête
+        # (top < body_y_start) ne sont pas divisés par ce gutter — ils sont
+        # émis en ordre vertical avant les colonnes du corps (voir
+        # _build_annotated_lines), ce qui évite qu'ils contaminent les sections.
         gutter_x = (gap_lo + gap_hi) / 2
-        left_count = sum(1 for x in line_starts if x < gutter_x)
-        right_count = sum(1 for x in line_starts if x >= gutter_x)
-        total = len(line_starts)
+        left_count = sum(1 for x in body_x0s if x < gutter_x)
+        right_count = sum(1 for x in body_x0s if x >= gutter_x)
+        total = len(body_x0s)
 
         if left_count / total >= 0.10 and right_count / total >= 0.10:
-            return _LayoutInfo("two_columns", gutter_x=gutter_x)
+            return _LayoutInfo("two_columns", gutter_x=gutter_x, body_y_start=body_y_start)
         return _LayoutInfo("single_column")
 
     # ------------------------------------------------------------------
@@ -291,15 +312,28 @@ class CVTransformer:
 
             if layout.layout_type == "two_columns" and layout.gutter_x:
                 gutter = layout.gutter_x
+                body_y = layout.body_y_start
+                # Les lignes dans la zone d'en-tête (bandeau coloré, top < body_y)
+                # sont émises sans division par le gutter — leur texte peut
+                # s'étendre sur toute la largeur de la colonne gauche.  Elles
+                # apparaissent avant les lignes du corps dans l'ordre vertical,
+                # ce qui garantit qu'elles tombent dans la section "header" et
+                # non dans les sections "experience" ou "education".
+                header_groups: list[tuple[float, list[dict]]] = []
                 left_lines: list[tuple[float, list[dict]]] = []
                 right_lines: list[tuple[float, list[dict]]] = []
                 for top, words in raw_groups:
-                    lw = sorted([w for w in words if w["x0"] < gutter], key=lambda w: w["x0"])
-                    rw = sorted([w for w in words if w["x0"] >= gutter], key=lambda w: w["x0"])
-                    if lw:
-                        left_lines.append((top, lw))
-                    if rw:
-                        right_lines.append((top, rw))
+                    if top < body_y:
+                        header_groups.append((top, words))
+                    else:
+                        lw = sorted([w for w in words if w["x0"] < gutter], key=lambda w: w["x0"])
+                        rw = sorted([w for w in words if w["x0"] >= gutter], key=lambda w: w["x0"])
+                        if lw:
+                            left_lines.append((top, lw))
+                        if rw:
+                            right_lines.append((top, rw))
+                for top, hw in sorted(header_groups, key=lambda x: x[0]):
+                    lines.append(_words_to_line(hw, "full"))
                 for top, lw in sorted(left_lines, key=lambda x: x[0]):
                     lines.append(_words_to_line(lw, "left"))
                 for top, rw in sorted(right_lines, key=lambda x: x[0]):
@@ -427,10 +461,23 @@ class CVTransformer:
         raw_entries = _parse_timed_entries(lines, is_education=True)
         edu_list: list[CVEducation] = []
         for exp in raw_entries:
+            degree = exp.title or ""
+            school = exp.company or ""
+            # Nettoyer les labels "Role:" résidus dans school (ex : "Data Engineer:")
+            if school.rstrip().endswith(":"):
+                school = ""
+            # Rejeter les entrées sans date dont degree et school sont des labels de rôle
+            # (ex : "Monitoring :", "CLOUD") — captées par _parse_skills() via raw_text.
+            if not exp.date_start and not exp.duration_months:
+                if degree.rstrip().endswith(":") or (not school and not degree):
+                    continue
+                if JOB_TITLE_RE.search(degree.rstrip(":")) and not exp.bullets:
+                    # Titre de poste sans date ni bullets → pas une formation
+                    continue
             edu_list.append(
                 CVEducation(
-                    degree=exp.title or "",
-                    school=exp.company or "",
+                    degree=degree,
+                    school=school,
                     year=exp.period,
                     date_start=exp.date_start,
                     date_end=exp.date_end,
@@ -709,14 +756,28 @@ def _parse_timed_entries(lines: list[_Line], is_education: bool = False) -> list
     if not lines:
         return []
 
+    from collections import Counter
+
+    # Taille de corps locale : mode des tailles non nulles de toutes les lignes.
+    # Utilisée pour distinguer les vrais en-têtes typographiques (taille > 1.2×corps)
+    # des noms d'entreprises bold mais de taille normale.
+    _sizes = [round(l.max_size, 1) for l in lines if l.text.strip() and l.max_size > 0]
+    _body_size = Counter(_sizes).most_common(1)[0][0] if _sizes else 10.0
+    _header_size_threshold = _body_size * 1.2
+
     entries: list[CVExperience] = []
-    # State: accumulate lines per entry, split on date lines or bold section markers
     entry_lines: list[_Line] = []
 
     def flush() -> None:
         if not entry_lines:
             return
         entry = _build_entry(entry_lines)
+        # Filtrer les blocs parasites : prénom/nom isolé, fragment sans date ni
+        # bullets (ex : "PEN", "professionnelles", ligne unique d'outil).
+        total_words = sum(len(l.text.split()) for l in entry_lines)
+        if total_words < 3 and not entry.date_start and not entry.duration_months and not entry.bullets:
+            entry_lines.clear()
+            return
         if entry.title or entry.company or entry.period or entry.bullets:
             entries.append(entry)
         entry_lines.clear()
@@ -732,8 +793,16 @@ def _parse_timed_entries(lines: list[_Line], is_education: bool = False) -> list
             if current_has_date and entry_lines:
                 flush()
             entry_lines.append(line)
-        elif line.is_bold and not _is_bullet(t) and len(t) < 80 and entry_lines:
-            # Bold non-bullet line = new entry header
+        elif (
+            line.is_bold
+            and not _is_bullet(t)
+            and len(t) < 80
+            and entry_lines
+            and line.max_size >= _header_size_threshold
+        ):
+            # Ligne typographiquement grande et bold = nouvel en-tête d'entrée.
+            # Les noms d'entreprises bold mais de taille normale (≈ body_size)
+            # ne déclenchent plus de flush — ils seront rattachés à l'entrée en cours.
             flush()
             entry_lines.append(line)
         else:

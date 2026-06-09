@@ -25,9 +25,10 @@ class CVSkills(BaseModel):
     languages: list[str] = Field(default_factory=list)
     data: list[str] = Field(default_factory=list)
     other: list[str] = Field(default_factory=list)
+    commerce: list[str] = Field(default_factory=list)
 
     def flat(self) -> list[str]:
-        return self.ml + self.mlops + self.cloud + self.languages + self.data + self.other
+        return self.ml + self.mlops + self.cloud + self.languages + self.data + self.other + self.commerce
 
 
 class CVExperience(BaseModel):
@@ -113,6 +114,7 @@ class ParsedCV(BaseModel):
     job_title: Optional[str] = None
     location: Optional[str] = None
     postal_code: Optional[str] = None
+    sector: Optional[str] = None
 
 
 class ScoreBreakdown(BaseModel):

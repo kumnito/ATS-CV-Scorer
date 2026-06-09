@@ -281,3 +281,55 @@ code postal quand présent.
 Nouveau test : `test_find_matching_jobs_uses_postal_code_with_location`.
 
 **Total suite après ces corrections : 90 tests, tous verts.**
+
+---
+
+## Travaux réalisés (session du 2026-06-09 — session 3)
+
+### Amélioration de la pertinence Adzuna — 5 axes
+
+#### 1. Détection du secteur (`src/core/lexicons.py`, `nlp_pipeline.py`, `schemas.py`)
+Nouveau `SECTOR_KEYWORDS` dans `lexicons.py` : 8 secteurs (magasin, mode,
+restauration, transport, industrie, btp, santé, finance). Nouvelle fonction
+`_extract_sector(NormalizedCV)` dans `nlp_pipeline.py` : scan du texte des
+expériences (titre + company + bullets) pour détecter le secteur dominant.
+Propagé dans `parse_normalized()` → champ `sector: Optional[str]` ajouté à
+`ParsedCV`.
+
+#### 2. Multi-requêtes Adzuna + déduplication par URL (`job_matcher.py`)
+`JOB_TITLE_SYNONYMS` ajouté dans `lexicons.py` (vendeur/développeur/data
+scientist/conducteur/opérateur). Nouveau `_find_synonym_queries(title)`
+et `_build_queries(parsed_cv)` → génèrent 1-3 requêtes Adzuna (titre de
+base + synonyme + titre×secteur). Chaque requête reçoit
+`max_results = max(5, max_results // nb_requêtes)`. Les offres de toutes
+les requêtes sont dédupliquées par URL avant scoring.
+
+#### 3. Filtre de seuil qualité + signal "peu d'offres" (`job_matcher.py`)
+`_MIN_SCORE_THRESHOLD = 25.0` — les offres sous ce score sont filtrées.
+Fallback : si aucune offre ne passe le seuil, toutes sont retournées (pas
+de page blanche). `few_results: bool` dans `JobSearchResult` — True quand
+`len(filtered) < 3 and bool(scored)`. Affiché dans `app.py` via
+`few_results_note`.
+
+#### 4. Nouveau type de retour `JobSearchResult` (dataclass)
+Remplace `list[RankedJobMatch]`. Champs : `matches`, `queries_used`,
+`location_used`, `few_results`. Toutes les occurrences dans `app.py` et les
+tests mises à jour.
+
+#### 5. UI — champ titre modifiable + affichage requête (`app.py`)
+- `job_title_input: gr.Textbox` pré-rempli au chargement du CV (output de
+  `on_cv_upload`) — l'utilisateur peut corriger le titre avant la recherche.
+- `search_query_md: gr.Markdown` — affiché après la recherche :
+  `🔍 Requête Adzuna : "vendeur" · variantes : "conseiller de vente" · 📍 Croix (30 km)`
+- `on_search` accepte désormais `title_override` ; si non vide, remplace
+  `parsed_cv.job_title` via `model_copy(update={...})` avant l'appel
+  `find_matching_jobs`.
+
+### Tests ajoutés (session 3)
+- `test_job_matcher.py` : 14 nouveaux tests (synonymes, secteur, dédup,
+  seuil, few_results) + mise à jour des assertions `calls` → vérification
+  "toutes les requêtes utilisent la bonne localisation" (plus d'assertion
+  sur une liste exacte).
+- `test_nlp_pipeline.py` : 6 nouveaux tests `_extract_sector`.
+
+**Total suite : 161 tests, tous verts.**

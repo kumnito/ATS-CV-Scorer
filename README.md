@@ -8,7 +8,7 @@ sdk_version: 4.44.0
 app_file: app.py
 pinned: false
 license: mit
-short_description: Upload your CV — auto-search matching jobs and score them with NLP + Claude AI
+short_description: Score your CV, find matching jobs, get AI feedback
 ---
 
 # ATS CV Scorer

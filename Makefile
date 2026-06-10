@@ -1,4 +1,4 @@
-.PHONY: install run dev test lint format clean update-lexicons
+.PHONY: install run dev test lint format clean update-lexicons install-ocr
 
 VENV := .venv
 PYTHON := $(VENV)/bin/python
@@ -28,6 +28,10 @@ format: install
 
 update-lexicons: install
 	$(PYTHON) -m src.services.lexicon_builder --force
+
+install-ocr: install
+	sudo apt-get install -y tesseract-ocr tesseract-ocr-fra poppler-utils
+	$(PIP) install pytesseract pdf2image Pillow
 
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} +

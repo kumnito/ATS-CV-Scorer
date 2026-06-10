@@ -32,3 +32,9 @@ pytest==8.3.4
 
 # Lexicon builder — HuggingFace dataset source (make update-lexicons)
 datasets>=2.0
+
+# OCR fallback (optionnel — voir make install-ocr)
+# Dépendances système : tesseract-ocr tesseract-ocr-fra poppler-utils
+pytesseract>=0.3.10
+pdf2image>=1.17.0
+Pillow>=10.0.0

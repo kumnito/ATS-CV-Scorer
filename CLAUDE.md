@@ -333,3 +333,112 @@ tests mises à jour.
 - `test_nlp_pipeline.py` : 6 nouveaux tests `_extract_sector`.
 
 **Total suite : 161 tests, tous verts.**
+
+---
+
+## Travaux réalisés (session du 2026-06-09 — session 4)
+
+### 1. Cascade d'extraction PDF 3 niveaux (`src/services/cv_transformer.py`)
+
+Refonte de `CVTransformer.transform()` :
+
+**Niveau 1 — pdfplumber** : confiance = `min(1.0, mots_extraits / 450)`.
+Si ≥ 0.85 → retour immédiat.
+
+**Niveau 2 — OCR Tesseract** : déclenché si confiance < 0.85. Ne remplace
+pdfplumber que si `ocr_mots > pdf_mots × 1.10 AND ocr_mots ≥ 150` (seuil
++10% pour préserver l'avantage layout de pdfplumber en cas de gain marginal).
+
+**Niveau 3 — Vision LLM Claude** : déclenché si confiance finale < 0.85 ET
+`settings.anthropic_api_key` présent. Gagne sur `_vision_richness_score()`
+(score structurel : expériences × 10, éducation × 8, skills × 2, projets × 10,
+email +15, titre +15, summary +10) — pas sur le word_count.
+
+**Invariant layout** : `_detect_layout()` tourne toujours sur les données
+pdfplumber réelles. Résultat injecté via `model_copy(update={"layout_detected":
+real_layout})` dans tous les chemins (Vision LLM retourne toujours
+"single_column", ce qui écraserait sinon la vraie détection).
+
+**Post-Vision LLM** : `_build_raw_text_from_normalized()` reconstruit raw_text
+depuis les champs structurés pour un word_count précis.
+
+**Logging** : `import logging; logger = logging.getLogger(__name__)` dans
+cv_transformer.py. `app.py` : `logging.basicConfig(level=logging.INFO, ...)`.
+
+**Tests** : `_transform_pdfplumber_only()` patche `settings.anthropic_api_key = ""`
+ET mocke `_extract_text_ocr → ""` pour forcer le chemin pdfplumber dans les
+fixtures lisant de vrais PDFs. Tests Vision LLM basés sur richesse structurelle
+(`mock_vision_cv_rich` / `mock_vision_cv_poor`), pas sur le word_count.
+`pdf2image` mocké via `patch.dict(sys.modules, {"pdf2image": mock_pdf2image})`.
+
+**3 tests connus en échec** (non-régressifs, pre-existants dans la session) :
+`test_two_col_layout_detected`, `test_keo_pen_layout_two_columns`,
+`test_keo_pen_experience_contains_sandro`.
+
+### 2. Logging détaillé dans CVQualityScorer
+
+`logger.info()` ajouté dans `CVQualityScorer.score()` pour diagnostiquer les
+critères du score contenus : word_count, skills total, has_metrics, has_verbs,
+has_projects, has_dates, plus le détail de chaque `pts_*`.
+
+### 3. Refonte CVQualityReport — 3 axes indépendants
+
+**Nouveaux modèles Pydantic** dans `src/core/schemas.py` :
+
+```python
+class ATSReadability(BaseModel):
+    layout: str              # "single_column" | "two_columns"
+    layout_label: str        # "✅ Optimal" | "⚠️ Risque parseur"
+    sections_found: list[str]
+    sections_missing: list[str]
+    extraction_method: str
+    is_machine_readable: bool  # word_count >= 150
+
+class ProfileStrength(BaseModel):
+    level: str    # "Solide" | "Correct" | "À renforcer"
+    score: int    # 0-100
+    strengths: list[str]
+    improvements: list[str]
+
+class Recommendation(BaseModel):
+    priority: int   # 1=Fort, 2=Moyen, 3=Faible
+    impact: str     # "Fort" | "Moyen" | "Faible"
+    action: str
+    why: str
+```
+
+**`CVQualityReport` simplifié** : `ats_readability`, `profile_strength`,
+`list[Recommendation]`, timeline carrière (conservée), `extraction_method` +
+`extraction_confidence` (compatibilité). Supprimés : `score_global`,
+`score_structure`, `score_contenu`, `keyword_density`, `has_metrics`,
+`sections_detectees`, `sections_manquantes`, `layout`, `word_count`.
+
+**Scoring ProfileStrength recalibré FR (8 critères, max 100 pts) :**
+- word_count ≥ 300 → +15
+- skills_total ≥ 10 → +20
+- experience_count ≥ 1 → +15
+- summary présent → +10
+- dates ≥ 50% des entrées expérience → +10
+- action_verbs OU action_nouns FR → +10 (nouveau : frozenset `_ACTION_NOUNS_FR`
+  accepte "Ingestion", "Contrôle", "Automatisation", etc.)
+- métriques présentes → +10
+- projets présents → +10
+
+Niveaux : "Solide" ≥ 75, "Correct" ≥ 50, "À renforcer" < 50.
+
+**Recommandations** ordonnées par priorité :
+1 (Fort) — bloquant ATS : layout 2 colonnes, sections manquantes
+2 (Moyen) — impact matching : métriques, projets, summary, dates
+3 (Faible) — polissage : verbes, skills < 10, mots < 300, sur-optimisation
+
+**UI `app.py`** : `_format_quality_report()` réécrit en 3 blocs Markdown
+(📋 Lisibilité ATS · 💼 Solidité du profil · 🎯 Actions prioritaires).
+`_format_cv_context_strip()` utilise `report.profile_strength.score`.
+`_extraction_badge()` supprimée (info intégrée dans la table ATS).
+
+**Tests** : `tests/test_cv_quality_scorer.py` réécrit — 32 tests (vs 21 avant),
+tous verts. Couverture : ATSReadability, ProfileStrength (score + level +
+strengths/improvements), Recommendations (schema, priorité, impact), action
+nouns FR, career stats, career gaps.
+
+**Total suite (hors cv_transformer) : 146 tests verts.**

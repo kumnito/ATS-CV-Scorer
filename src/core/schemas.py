@@ -73,30 +73,54 @@ class NormalizedCV(BaseModel):
     raw_text: str = ""
     layout_detected: str = "single_column"
     word_count: int = 0
+    extraction_method: str = "pdfplumber"   # "pdfplumber" | "ocr" | "vision_llm"
+    extraction_confidence: float = 1.0       # 0.0 – 1.0
 
 
 # ---------------------------------------------------------------------------
-# CV Quality Report
+# CV Quality Report — 3 axes indépendants
 # ---------------------------------------------------------------------------
+
+
+class ATSReadability(BaseModel):
+    layout: str                    # "single_column" | "two_columns"
+    layout_label: str              # "✅ Optimal" | "⚠️ Risque parseur"
+    sections_found: list[str] = Field(default_factory=list)
+    sections_missing: list[str] = Field(default_factory=list)
+    extraction_method: str = "pdfplumber"
+    is_machine_readable: bool      # True si word_count >= 150 mots extraits
+
+
+class ProfileStrength(BaseModel):
+    level: str          # "Solide" | "Correct" | "À renforcer"
+    score: int          # 0-100
+
+    strengths: list[str] = Field(default_factory=list)
+    improvements: list[str] = Field(default_factory=list)
+
+
+class Recommendation(BaseModel):
+    priority: int        # 1 = Fort, 2 = Moyen, 3 = Faible
+    impact: str          # "Fort" | "Moyen" | "Faible"
+    action: str
+    why: str
 
 
 class CVQualityReport(BaseModel):
-    score_structure: int
-    score_contenu: int
-    score_global: int  # 40% structure + 60% contenu
-    sections_detectees: list[str] = Field(default_factory=list)
-    sections_manquantes: list[str] = Field(default_factory=list)
-    layout: str
-    word_count: int
-    has_metrics: bool
-    keyword_density: float
-    recommendations: list[str] = Field(default_factory=list)
-    # Derived career fields
+    ats_readability: ATSReadability
+    profile_strength: ProfileStrength
+    recommendations: list[Recommendation] = Field(default_factory=list)
+
+    # Timeline carrière (conservé)
     total_experience_years: float = 0.0
     career_start_year: Optional[int] = None
     most_recent_role: Optional[str] = None
     education_years: int = 0
     career_gaps: list[str] = Field(default_factory=list)
+
+    # Extraction pipeline (conservé pour compatibilité)
+    extraction_method: str = "pdfplumber"
+    extraction_confidence: float = 1.0
 
 
 # ---------------------------------------------------------------------------

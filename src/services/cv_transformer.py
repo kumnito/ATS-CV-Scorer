@@ -5,10 +5,13 @@ font name) to detect single-column vs two-column layouts and reconstruct a
 semantically-ordered text stream before NLP parsing.
 """
 
+import logging
 import re
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 import pdfplumber
 
@@ -22,6 +25,7 @@ from src.core.lexicons import (
     SKILL_CATEGORIES,
     TITLE_SPLIT_RE,
 )
+from src.core.config import settings
 from src.core.schemas import (
     CVEducation,
     CVExperience,
@@ -119,6 +123,36 @@ class _LayoutInfo:
 
 
 # ---------------------------------------------------------------------------
+# Vision LLM richness score
+# ---------------------------------------------------------------------------
+
+
+def _vision_richness_score(cv: "NormalizedCV") -> float:
+    """Score de richesse structurelle d'un NormalizedCV.
+
+    Utilisé pour comparer Vision LLM vs pdfplumber/OCR sans dépendre du
+    word_count brut (qui compte le texte décoratif pour pdfplumber et les
+    noms de clés JSON pour Vision LLM).
+    """
+    score = 0.0
+    score += len(cv.experience) * 10
+    score += len(cv.education) * 8
+    score += sum(len(v) for v in [
+        cv.skills.ml,
+        cv.skills.mlops,
+        cv.skills.cloud,
+        cv.skills.languages,
+        cv.skills.data,
+        cv.skills.other,
+    ]) * 2
+    score += len(cv.projects) * 10
+    score += 15 if cv.header.email else 0
+    score += 15 if cv.header.title else 0
+    score += 10 if cv.summary else 0
+    return score
+
+
+# ---------------------------------------------------------------------------
 # Public class
 # ---------------------------------------------------------------------------
 
@@ -131,17 +165,383 @@ class CVTransformer:
     parsing sections, header, skills, experience, education, and projects.
     """
 
-    def transform(self, pdf_path: str) -> NormalizedCV:
-        words_per_page = self._extract_words(pdf_path)
+    # ------------------------------------------------------------------
+    # Public entry point — cascade : pdfplumber → OCR → Vision LLM
+    # ------------------------------------------------------------------
 
+    def transform(self, pdf_path: str) -> NormalizedCV:
+        """Extraire un NormalizedCV depuis un PDF, avec fallback automatique.
+
+        Cascade à 3 niveaux :
+          1. pdfplumber confiance ≥ 0.85 → retourner directement
+          2. pdfplumber < 0.85 → OCR ; OCR gagne si +10 % de mots
+             si confiance résultante ≥ 0.85 → pas de Vision LLM
+          3. confiance < 0.85 + clé Anthropic → Vision LLM
+             Vision LLM gagne si son score de richesse structurelle
+             dépasse celui du meilleur résultat pdfplumber/OCR
+
+        Le layout_detected est toujours calculé depuis les données pdfplumber
+        réelles et injecté dans le résultat final, quelle que soit la méthode
+        d'extraction retenue.
+        """
+        _CONFIDENCE_THRESHOLD = 0.85
+
+        words_per_page = self._extract_words(pdf_path)
+        all_words = [w for page in words_per_page for w in page]
+        pdf_confidence = round(min(1.0, len(all_words) / 450.0), 2)
+        logger.info("cascade | pdfplumber: %d mots, confiance %.2f", len(all_words), pdf_confidence)
+
+        # Layout toujours détecté sur le PDF réel, indépendamment de la cascade
+        layout_info = self._detect_layout(words_per_page)
+        real_layout = layout_info.layout_type
+
+        def _with_real_layout(cv: NormalizedCV) -> NormalizedCV:
+            if cv.layout_detected != real_layout:
+                return cv.model_copy(update={"layout_detected": real_layout})
+            return cv
+
+        # --- Niveau 1 : pdfplumber suffisant ---
+        if pdf_confidence >= _CONFIDENCE_THRESHOLD:
+            logger.info("cascade | niveau 1 → pdfplumber direct")
+            return self._transform_from_words(
+                words_per_page,
+                extraction_method="pdfplumber",
+                extraction_confidence=pdf_confidence,
+            )
+
+        # --- Niveau 2 : OCR ---
+        ocr_text = ""
+        try:
+            ocr_text = self._extract_text_ocr(pdf_path)
+        except Exception as exc:
+            logger.info("cascade | OCR indisponible : %s", exc)
+
+        ocr_word_count = len(ocr_text.split()) if ocr_text else 0
+        logger.info("cascade | OCR: %d mots", ocr_word_count)
+
+        _OCR_WINS_THRESHOLD = 1.10
+        if ocr_word_count > len(all_words) * _OCR_WINS_THRESHOLD and ocr_word_count >= 150:
+            best_confidence = round(min(1.0, ocr_word_count / 450.0), 2)
+            use_ocr = True
+            logger.info("cascade | meilleur = OCR (%d mots, conf %.2f)", ocr_word_count, best_confidence)
+        elif len(all_words) >= 150:
+            best_confidence = pdf_confidence
+            use_ocr = False
+            logger.info("cascade | meilleur = pdfplumber (%d mots, conf %.2f)", len(all_words), best_confidence)
+        else:
+            best_word_count = max(len(all_words), ocr_word_count)
+            best_confidence = round(min(1.0, best_word_count / 450.0), 2)
+            use_ocr = ocr_word_count >= len(all_words)
+            logger.info("cascade | meilleur = %s (%d mots, conf %.2f)",
+                        "OCR" if use_ocr else "pdfplumber", best_word_count, best_confidence)
+
+        if best_confidence >= _CONFIDENCE_THRESHOLD:
+            logger.info("cascade | niveau 2 → confiance suffisante, pas de Vision LLM")
+            if use_ocr:
+                return _with_real_layout(self._transform_from_text(ocr_text, "ocr", best_confidence))
+            return self._transform_from_words(words_per_page, "pdfplumber", best_confidence)
+
+        # --- Construction du meilleur résultat pdfplumber/OCR pour comparaison ---
+        if use_ocr and ocr_word_count >= 30:
+            best_cv = _with_real_layout(self._transform_from_text(ocr_text, "ocr", best_confidence))
+        elif len(all_words) >= 30:
+            best_cv = self._transform_from_words(words_per_page, "pdfplumber", pdf_confidence)
+        else:
+            best_cv = NormalizedCV(extraction_method="pdfplumber", extraction_confidence=0.0,
+                                   layout_detected=real_layout)
+
+        # --- Niveau 3 : Vision LLM (comparaison par richesse structurelle) ---
+        if settings.anthropic_api_key:
+            logger.info("cascade | niveau 3 → Vision LLM déclenché (conf %.2f < %.2f)",
+                        best_confidence, _CONFIDENCE_THRESHOLD)
+            best_richness = _vision_richness_score(best_cv)
+            logger.info("cascade | %s richness: %.0f", best_cv.extraction_method, best_richness)
+            try:
+                vision_cv = self._transform_from_vision(pdf_path)
+                # Reconstruire raw_text et word_count depuis les champs structurés
+                enriched_raw = self._build_raw_text_from_normalized(vision_cv)
+                vision_cv = vision_cv.model_copy(update={
+                    "raw_text": enriched_raw,
+                    "word_count": len(enriched_raw.split()),
+                    "layout_detected": real_layout,
+                })
+                vision_richness = _vision_richness_score(vision_cv)
+                winner = "vision" if vision_richness > best_richness else best_cv.extraction_method
+                logger.info("cascade | vision richness: %.0f → retenu: %s", vision_richness, winner)
+                if vision_richness > best_richness:
+                    return vision_cv
+            except Exception as exc:
+                logger.warning("cascade | Vision LLM échoué : %s", exc)
+        else:
+            logger.info("cascade | niveau 3 ignoré (pas de clé Anthropic)")
+
+        return best_cv
+
+    def _build_raw_text_from_normalized(self, cv: NormalizedCV) -> str:
+        """Reconstruire raw_text depuis tous les champs structurés d'un NormalizedCV.
+
+        Utilisé après Vision LLM pour obtenir un word_count fidèle au contenu
+        réel du CV plutôt qu'au texte JSON brut.
+        """
+        parts: list[str] = []
+
+        if cv.header.name:
+            parts.append(cv.header.name)
+        if cv.header.title:
+            parts.append(cv.header.title)
+        if cv.header.location:
+            parts.append(cv.header.location)
+
+        if cv.summary:
+            parts.append(cv.summary)
+
+        for category, skills in cv.skills.model_dump().items():
+            if isinstance(skills, list):
+                parts.extend(str(s) for s in skills if s)
+
+        for exp in cv.experience:
+            if exp.title:
+                parts.append(exp.title)
+            if exp.company:
+                parts.append(exp.company)
+            if exp.period:
+                parts.append(exp.period)
+            parts.extend(exp.bullets)
+
+        for edu in cv.education:
+            if edu.degree:
+                parts.append(edu.degree)
+            if edu.school:
+                parts.append(edu.school)
+            parts.extend(edu.skills)
+
+        for proj in cv.projects:
+            if proj.name:
+                parts.append(proj.name)
+            if proj.description:
+                parts.append(proj.description)
+            parts.extend(proj.stack)
+            parts.extend(proj.metrics)
+
+        return " ".join(p for p in parts if p and str(p).strip())
+
+    # ------------------------------------------------------------------
+    # Step 0 — Extraction quality assessment
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _extraction_quality(words: list[dict]) -> str:
+        n = len(words)
+        if n >= 150:
+            return "good"
+        if n >= 50:
+            return "partial"
+        return "failed"
+
+    # ------------------------------------------------------------------
+    # Step 0b — OCR extraction (pytesseract + pdf2image, lazy import)
+    # ------------------------------------------------------------------
+
+    def _extract_text_ocr(self, pdf_path: str) -> str:
+        """Convertir le PDF en images et extraire le texte via Tesseract.
+
+        Dépendances systèmes requises :
+            sudo apt-get install tesseract-ocr tesseract-ocr-fra poppler-utils
+        Dépendances Python (requirements-ocr.txt ou pip install) :
+            pytesseract>=0.3.10  pdf2image>=1.17.0  Pillow>=10.0.0
+        """
+        try:
+            from pdf2image import convert_from_path  # type: ignore[import]
+            import pytesseract  # type: ignore[import]
+        except ImportError as exc:
+            raise RuntimeError(
+                "OCR non disponible — installer les dépendances : "
+                "pip install pytesseract pdf2image Pillow  et  "
+                "apt-get install tesseract-ocr tesseract-ocr-fra poppler-utils"
+            ) from exc
+
+        images = convert_from_path(pdf_path, dpi=300)
+        if not images:
+            return ""
+
+        parts: list[str] = []
+        for img in images:
+            page_text = pytesseract.image_to_string(
+                img, lang="fra+eng", config="--psm 1 --oem 1"
+            )
+            parts.append(page_text)
+        return "\n\n".join(parts)
+
+    # ------------------------------------------------------------------
+    # Step 0c — Vision LLM extraction (Claude API)
+    # ------------------------------------------------------------------
+
+    def _transform_from_vision(self, pdf_path: str) -> NormalizedCV:
+        """Extraire le NormalizedCV via Claude Vision (image du PDF).
+
+        Nécessite ANTHROPIC_API_KEY dans .env.
+        Coût estimé : ~0.01 $ / CV (claude-sonnet-4-6, 1 image).
+        """
+        import base64
+        import io
+        import json
+
+        try:
+            from pdf2image import convert_from_path  # type: ignore[import]
+        except ImportError as exc:
+            raise RuntimeError("pdf2image requis pour le fallback Vision LLM") from exc
+
+
+        if not settings.anthropic_api_key:
+            raise RuntimeError("ANTHROPIC_API_KEY absent — Vision LLM désactivé")
+
+        images = convert_from_path(pdf_path, dpi=200, first_page=1, last_page=1)
+        if not images:
+            raise RuntimeError("Impossible de convertir le PDF en image")
+
+        buf = io.BytesIO()
+        images[0].save(buf, format="PNG")
+        img_b64 = base64.standard_b64encode(buf.getvalue()).decode()
+
+        import anthropic as _anthropic
+        client = _anthropic.Anthropic(api_key=settings.anthropic_api_key)
+
+        system_prompt = (
+            "Tu es un extracteur de CV expert. "
+            "Extrais TOUTES les informations visibles dans ce CV, même partielles. "
+            "Ne rien omettre. Retourne UNIQUEMENT un JSON valide, sans markdown."
+        )
+        user_prompt = (
+            "Extrais ce CV avec le maximum de détails et retourne un JSON avec ces clés exactes :\n"
+            '{"header": {"name": null, "title": null, "email": null, "phone": null, '
+            '"location": null, "postal_code": null, "github": null, "linkedin": null}, '
+            '"summary": null, '
+            '"skills": {"ml": [], "mlops": [], "cloud": [], "languages": [], '
+            '"data": [], "other": [], "commerce": []}, '
+            '"experience": [{"title": null, "company": null, "date_start": null, '
+            '"date_end": null, "is_current": false, "bullets": []}], '
+            '"education": [{"degree": "", "school": "", "date_start": null, '
+            '"date_end": null, "is_current": false}], '
+            '"projects": [], "languages": []}\n\n'
+            "Instructions importantes :\n"
+            "- skills : inclure TOUS les outils visibles, y compris ceux mentionnés "
+            "dans les sections formation/éducation (ex. XGBoost, FastAPI, Docker appris en formation "
+            "→ les mettre dans skills, pas seulement dans education).\n"
+            "- experience.bullets : retranscrire chaque point de manière complète.\n"
+            "- education : inclure TOUTES les formations, certifications et MOOCs visibles.\n"
+            "- projects : inclure les projets avec stack technique et métriques si présents.\n"
+            "- languages : liste de strings simples (ex. [\"Français\", \"Anglais\"])."
+        )
+
+        response = client.messages.create(
+            model=settings.claude_model,
+            max_tokens=4096,
+            system=system_prompt,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": "image/png", "data": img_b64},
+                    },
+                    {"type": "text", "text": user_prompt},
+                ],
+            }],
+        )
+
+        raw_json = response.content[0].text
+        # Strip markdown code fences if present
+        raw_json = re.sub(r"```(?:json)?\s*", "", raw_json).strip()
+        start, end = raw_json.find("{"), raw_json.rfind("}") + 1
+        if start == -1 or end == 0:
+            raise ValueError("Aucun JSON dans la réponse Vision LLM")
+
+        data = json.loads(raw_json[start:end])
+
+        # Reconstruct raw_text from all text fields for skill matching and word count comparison.
+        # All items are converted to str — Claude peut varier la structure de ses listes.
+        def _s(v: object) -> str:
+            return str(v) if v is not None else ""
+
+        def _strs(lst: object) -> list[str]:
+            if not isinstance(lst, list):
+                return []
+            return [_s(i) for i in lst if i is not None and str(i).strip()]
+
+        raw_parts: list[str] = []
+        hdr = data.get("header") or {}
+        raw_parts.extend(filter(None, [hdr.get("name"), hdr.get("title"),
+                                       hdr.get("location"), hdr.get("linkedin")]))
+        if data.get("summary"):
+            raw_parts.append(_s(data["summary"]))
+        for exp in data.get("experience", []):
+            if not isinstance(exp, dict):
+                continue
+            raw_parts.extend(filter(None, [exp.get("title"), exp.get("company")]))
+            raw_parts.extend(_strs(exp.get("bullets")))
+        for edu in data.get("education", []):
+            if not isinstance(edu, dict):
+                continue
+            raw_parts.extend(filter(None, [edu.get("degree"), edu.get("school")]))
+        for proj in data.get("projects", []):
+            if isinstance(proj, dict):
+                raw_parts.extend(filter(None, [proj.get("name"), proj.get("description")]))
+            elif isinstance(proj, str):
+                raw_parts.append(proj)
+        skills_data = data.get("skills") or {}
+        for skill_list in skills_data.values():
+            raw_parts.extend(_strs(skill_list))
+        raw_parts.extend(_strs(data.get("languages")))
+        data["raw_text"] = " ".join(s for s in raw_parts if isinstance(s, str) and s.strip())
+        data["layout_detected"] = "single_column"
+        data["word_count"] = len(data["raw_text"].split())
+        data["extraction_method"] = "vision_llm"
+        data["extraction_confidence"] = 0.95
+
+        # Normaliser les champs liste[str] — Claude peut retourner des dicts à la place
+        def _flatten_str_list(lst: object) -> list[str]:
+            if not isinstance(lst, list):
+                return []
+            result = []
+            for item in lst:
+                if isinstance(item, str):
+                    result.append(item)
+                elif isinstance(item, dict):
+                    # Prendre la première valeur de type str trouvée
+                    for v in item.values():
+                        if isinstance(v, str) and v.strip():
+                            result.append(v)
+                            break
+            return result
+
+        data["languages"] = _flatten_str_list(data.get("languages"))
+
+        return NormalizedCV.model_validate(data)
+
+    # ------------------------------------------------------------------
+    # Core pipeline — pdfplumber words → NormalizedCV
+    # ------------------------------------------------------------------
+
+    def _transform_from_words(
+        self,
+        words_per_page: list[list[dict]],
+        extraction_method: str,
+        extraction_confidence: float,
+    ) -> NormalizedCV:
         if not words_per_page or not any(words_per_page):
-            return NormalizedCV()
+            return NormalizedCV(
+                extraction_method=extraction_method,
+                extraction_confidence=0.0,
+            )
 
         layout_info = self._detect_layout(words_per_page)
         lines = self._build_annotated_lines(words_per_page, layout_info)
 
         if not lines:
-            return NormalizedCV()
+            return NormalizedCV(
+                extraction_method=extraction_method,
+                extraction_confidence=0.0,
+            )
 
         raw_text = _lines_to_raw_text(lines)
         body_size = _estimate_body_size(lines)
@@ -169,8 +569,6 @@ class CVTransformer:
             header_lines_for_parsing = section_map.get("header", [])
 
         header = self._parse_header(header_lines_for_parsing)
-        # Localisation : recherche dans tout le document — l'adresse postale
-        # peut se trouver dans une sidebar ou une section hors en-tête.
         if not header.location:
             header = header.model_copy(update={
                 "location": _extract_location_from_text(raw_text),
@@ -178,9 +576,6 @@ class CVTransformer:
             })
         summary = _lines_to_raw_text(section_map.get("summary", [])).strip() or None
 
-        # Quand il n'y a pas de section "summary" explicite, extraire l'accroche
-        # depuis les lignes de l'en-tête : une ligne longue (> 60 chars, > 8 mots)
-        # qui n'est pas une coordonnée de contact est probablement l'accroche.
         if not summary:
             _hdr_lines = section_map.get("header", [])
             _accroche = [
@@ -195,12 +590,12 @@ class CVTransformer:
                 and not POSTAL_CODE_CITY_RE.search(l.text)
             ]
             summary = _lines_to_raw_text(_accroche).strip() or None
+
         skills = self._parse_skills(raw_text)
         experience = self._parse_experience(section_map.get("experience", []))
         education = self._parse_education(section_map.get("education", []))
         projects = self._parse_projects(section_map.get("projects", []))
         languages = self._parse_language_list(section_map.get("languages", []))
-
         word_count = len(raw_text.split())
 
         return NormalizedCV(
@@ -214,6 +609,86 @@ class CVTransformer:
             raw_text=raw_text,
             layout_detected=layout_info.layout_type,
             word_count=word_count,
+            extraction_method=extraction_method,
+            extraction_confidence=extraction_confidence,
+        )
+
+    # ------------------------------------------------------------------
+    # Degraded pipeline — plain text (OCR) → NormalizedCV
+    # ------------------------------------------------------------------
+
+    def _transform_from_text(
+        self,
+        text: str,
+        extraction_method: str,
+        extraction_confidence: float,
+    ) -> NormalizedCV:
+        """Construire un NormalizedCV depuis un texte brut (sans info positionnelle).
+
+        Utilisé pour le chemin OCR : crée des _Line fictifs (taille/gras uniformes)
+        afin de réutiliser toute la logique de détection de sections et de parsing
+        existante.  La détection d'en-tête repose uniquement sur les patterns texte
+        (majuscules, deux-points, Title Case) sans signal typographique.
+        """
+        text = re.sub(r"[ \t]+", " ", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+
+        raw_lines = text.split("\n")
+        lines: list[_Line] = [
+            _Line(
+                text=raw_line,
+                max_size=12.0,
+                is_bold=False,
+                x0=0.0,
+                top=float(i * 15),
+                column="full",
+            )
+            for i, raw_line in enumerate(raw_lines)
+        ]
+
+        raw_text = _lines_to_raw_text(lines)
+        section_map = self._split_into_sections(lines, body_size=12.0)
+
+        header = self._parse_header(section_map.get("header", []))
+        if not header.location:
+            header = header.model_copy(update={
+                "location": _extract_location_from_text(raw_text),
+                "postal_code": _extract_postal_code_from_text(raw_text),
+            })
+
+        summary = _lines_to_raw_text(section_map.get("summary", [])).strip() or None
+        if not summary:
+            _hdr = [
+                l for l in section_map.get("header", [])
+                if len(l.text.strip()) > 60
+                and len(l.text.split()) > 8
+                and not _EMAIL_RE.search(l.text)
+                and not _PHONE_RE.search(l.text)
+                and not _GITHUB_RE.search(l.text)
+                and not _LINKEDIN_RE.search(l.text)
+            ]
+            summary = _lines_to_raw_text(_hdr).strip() or None
+
+        skills = self._parse_skills(raw_text)
+        experience = self._parse_experience(section_map.get("experience", []))
+        education = self._parse_education(section_map.get("education", []))
+        projects = self._parse_projects(section_map.get("projects", []))
+        languages = self._parse_language_list(section_map.get("languages", []))
+        word_count = len(raw_text.split())
+
+        return NormalizedCV(
+            header=header,
+            summary=summary,
+            skills=skills,
+            experience=experience,
+            education=education,
+            projects=projects,
+            languages=languages,
+            raw_text=raw_text,
+            layout_detected="single_column",
+            word_count=word_count,
+            extraction_method=extraction_method,
+            extraction_confidence=extraction_confidence,
         )
 
     # ------------------------------------------------------------------

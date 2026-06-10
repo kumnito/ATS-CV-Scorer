@@ -1,5 +1,9 @@
 """Hugging Face Spaces entry point — Gradio interface for ATS CV Scorer."""
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(name)s | %(levelname)s | %(message)s")
+
 import gradio as gr
 import gradio_client.utils as _gradio_client_utils
 
@@ -54,56 +58,70 @@ def _bar(value: int, max_val: int = 100, width: int = 20) -> str:
 
 
 def _format_quality_report(cv: NormalizedCV, report: CVQualityReport) -> str:
-    layout_badge = (
-        "✅ 1 colonne (optimal ATS)" if report.layout == "single_column" else "⚠️ 2 colonnes (risque parseur ATS)"
-    )
+    ats = report.ats_readability
+    ps = report.profile_strength
+
+    # Cellule extraction
+    m, c = report.extraction_method, report.extraction_confidence
+    if m == "pdfplumber":
+        ext_label = f"{'✅' if c >= 0.85 else '⚠️'} Extraction native ({c:.0%})"
+    elif m == "ocr":
+        ext_label = f"⚠️ OCR Tesseract ({c:.0%})"
+    else:
+        ext_label = f"🤖 Vision IA Claude ({c:.0%})"
+
+    sections_str = " · ".join(ats.sections_found) if ats.sections_found else "—"
+    readability_label = "✅ Oui" if ats.is_machine_readable else f"⚠️ Non ({cv.word_count} mots < 150)"
+
+    table_rows = [
+        f"| Format | {ats.layout_label} |",
+        f"| Sections trouvées | ✅ {sections_str} |",
+    ]
+    if ats.sections_missing:
+        table_rows.append(f"| Sections manquantes | ❌ {' · '.join(ats.sections_missing)} |")
+    table_rows += [
+        f"| Extraction | {ext_label} |",
+        f"| Lisibilité machine | {readability_label} |",
+    ]
 
     lines = [
-        "## 📊 Qualité du CV",
+        "## 📋 Lisibilité ATS",
         "",
-        f"**Score global : {report.score_global}/100**",
-        f"`{_bar(report.score_global)}` {report.score_global}%",
-        "",
-        "| Dimension | Score | Barre |",
-        "|---|---|---|",
-        f"| Structure | {report.score_structure}/100 | `{_bar(report.score_structure, width=10)}` |",
-        f"| Contenu   | {report.score_contenu}/100 | `{_bar(report.score_contenu, width=10)}` |",
-        "",
-        f"📐 Layout : {layout_badge}  ·  📝 {report.word_count} mots  ·  📊 Densité mots-clés : {report.keyword_density:.1%}",
+        "| Critère | Statut |",
+        "|---|---|",
+        *table_rows,
         "",
     ]
 
-    if report.sections_detectees:
-        lines += [
-            "### ✅ Sections détectées",
-            "  ".join(f"`{s}`" for s in report.sections_detectees),
-            "",
-        ]
+    # Solidité du profil
+    level_emoji = {"Solide": "🟢", "Correct": "🟡", "À renforcer": "🔴"}.get(ps.level, "")
+    lines += [
+        f"## 💼 Solidité du profil — {level_emoji} {ps.level}",
+        f"`{_bar(ps.score)}` {ps.score}/100",
+        "",
+    ]
+    if ps.strengths:
+        lines.append("✅ **Points forts**")
+        lines.extend(f"- {s}" for s in ps.strengths)
+        lines.append("")
+    if ps.improvements:
+        lines.append("💡 **À améliorer**")
+        lines.extend(f"- {imp}" for imp in ps.improvements)
+        lines.append("")
 
-    if report.sections_manquantes:
-        lines += [
-            "### ❌ Sections manquantes",
-            "  ".join(f"`{s}`" for s in report.sections_manquantes),
-            "",
-        ]
-
-    badges = []
-    if report.has_metrics:
-        badges.append("✅ Métriques quantifiées")
-    else:
-        badges.append("❌ Pas de métriques")
-    lines += ["  ".join(badges), ""]
-
+    # Recommandations prioritaires
     if report.career_gaps:
         lines += ["### ⚠️ Trous de carrière détectés"]
-        for gap in report.career_gaps:
-            lines.append(f"- {gap}")
+        lines.extend(f"- {gap}" for gap in report.career_gaps)
         lines.append("")
 
     if report.recommendations:
-        lines += ["### 💡 Recommandations (par impact ATS décroissant)"]
-        for i, rec in enumerate(report.recommendations, 1):
-            lines.append(f"{i}. {rec}")
+        _impact_emoji = {"Fort": "🔴", "Moyen": "🟠", "Faible": "🟡"}
+        recs_sorted = sorted(report.recommendations, key=lambda r: r.priority)
+        lines.append("## 🎯 Actions prioritaires")
+        for i, rec in enumerate(recs_sorted, 1):
+            emoji = _impact_emoji.get(rec.impact, "⚪")
+            lines.append(f"{i}. {emoji} **{rec.action}** — {rec.why}")
         lines.append("")
 
     return "\n".join(lines)
@@ -182,8 +200,9 @@ def _format_cv_context_strip(parsed_cv, report: CVQualityReport) -> str:
         parts.append(f"**{parsed_cv.job_title}**")
     if parsed_cv.location:
         parts.append(f"📍 {parsed_cv.location}")
-    color = _score_color(report.score_global)
-    parts.append(f"{color} Score CV : **{report.score_global}/100**")
+    score = report.profile_strength.score
+    color = _score_color(score)
+    parts.append(f"{color} Score CV : **{score}/100**")
     return "✅ Profil chargé — " + " · ".join(parts)
 
 
@@ -407,7 +426,7 @@ with gr.Blocks(
         with gr.Tab("📋 Analyse du CV"):
             gr.Markdown(
                 "Uploadez votre CV pour obtenir immédiatement une **analyse qualité ATS** — "
-                "score structure/contenu, timeline carrière, compétences détectées et recommandations. "
+                "lisibilité parseur, solidité du profil, timeline carrière et actions prioritaires. "
                 "Aucun appel réseau externe n'est déclenché à cette étape."
             )
             with gr.Row():

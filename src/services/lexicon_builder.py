@@ -51,6 +51,14 @@ _TRIVIAL_OCCUPATION_WORDS: frozenset[str] = frozenset({
     "technician", "manager", "officer", "consultant", "architect",
 })
 
+# ESCO multi-word skill phrases excluded from semantic embedding generation
+# because they match almost any CV regardless of domain (e.g. "professional
+# network", "training programmes", "risk management" — observed during
+# threshold calibration at 0.51, see make benchmark --calibrate). Empty by
+# design: entries should only be added based on real user feedback from HF
+# Spaces, not pre-emptively hardcoded.
+ESCO_PHRASE_BLOCKLIST: frozenset[str] = frozenset()
+
 # Keywords used to assign a raw skill string to a category bucket.
 _CATEGORY_KEYWORDS: dict[str, list[str]] = {
     "ml": [
@@ -243,7 +251,7 @@ class LexiconBuilder:
                 skill
                 for skills in result["skill_categories"].values()
                 for skill in skills
-                if len(skill.split()) >= 2
+                if len(skill.split()) >= 2 and skill not in ESCO_PHRASE_BLOCKLIST
             }
         )
         if not phrases:

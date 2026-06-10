@@ -570,6 +570,36 @@ class TestVisionLLMFallback:
 
         mock_vis.assert_not_called()
 
+    def test_vision_not_triggered_when_disabled_via_settings(self):
+        """VISION_LLM_ENABLED=false bloque le niveau 3 même avec une clé API valide."""
+        t = CVTransformer()
+        empty_words: list[list[dict]] = [[]]
+
+        with patch("src.services.cv_transformer.settings") as mock_settings, \
+             patch.object(t, "_extract_words", return_value=empty_words), \
+             patch.object(t, "_extract_text_ocr", return_value="just a few words"), \
+             patch.object(t, "_transform_from_vision") as mock_vis:
+            mock_settings.anthropic_api_key = "sk-test"
+            mock_settings.vision_llm_enabled = False
+            t.transform("dummy.pdf")
+
+        mock_vis.assert_not_called()
+
+    def test_vision_not_triggered_when_allow_vision_false(self):
+        """allow_vision=False bloque le niveau 3 (quota par session atteint)."""
+        t = CVTransformer()
+        empty_words: list[list[dict]] = [[]]
+
+        with patch("src.services.cv_transformer.settings") as mock_settings, \
+             patch.object(t, "_extract_words", return_value=empty_words), \
+             patch.object(t, "_extract_text_ocr", return_value="just a few words"), \
+             patch.object(t, "_transform_from_vision") as mock_vis:
+            mock_settings.anthropic_api_key = "sk-test"
+            mock_settings.vision_llm_enabled = True
+            t.transform("dummy.pdf", allow_vision=False)
+
+        mock_vis.assert_not_called()
+
     def test_vision_not_triggered_when_confidence_sufficient(self):
         """Vision LLM non appelé si pdfplumber/OCR atteignent confiance ≥ 0.85."""
         t = CVTransformer()

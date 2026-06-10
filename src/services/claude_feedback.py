@@ -9,6 +9,16 @@ Focus on: skill alignment, experience relevance, missing ATS keywords, and struc
 Always respond in French, regardless of the language of the CV or job description.
 Be direct and specific. Format your response in markdown."""
 
+# Budget global (process-wide) d'appels Claude — protège la clé API limitée à
+# $10 sur la démo HF Spaces. ~300 appels feedback (~$0.025/appel) ≈ $7.50,
+# laissant une marge de sécurité pour les appels Vision LLM (cascade niveau 3).
+CLAUDE_CALLS_LIMIT = 300
+CLAUDE_CALLS_COUNT = 0
+
+
+class ClaudeBudgetExceeded(Exception):
+    """Levée quand CLAUDE_CALLS_LIMIT a été atteint pour ce processus."""
+
 
 class ClaudeFeedback:
     def __init__(self, api_key: str = "") -> None:
@@ -23,6 +33,12 @@ class ClaudeFeedback:
         job_description: str,
         scoring_result: ScoringResult,
     ) -> str:
+        global CLAUDE_CALLS_COUNT
+        if CLAUDE_CALLS_COUNT >= CLAUDE_CALLS_LIMIT:
+            raise ClaudeBudgetExceeded(
+                f"Claude calls limit reached ({CLAUDE_CALLS_LIMIT})."
+            )
+
         user_content = f"""## Job Description
 {job_description[:2000]}
 
@@ -64,4 +80,5 @@ Provide:
             ],
             messages=[{"role": "user", "content": user_content}],
         )
+        CLAUDE_CALLS_COUNT += 1
         return response.content[0].text

@@ -170,16 +170,20 @@ class CVTransformer:
     # Public entry point — cascade : pdfplumber → OCR → Vision LLM
     # ------------------------------------------------------------------
 
-    def transform(self, pdf_path: str) -> NormalizedCV:
+    def transform(self, pdf_path: str, allow_vision: bool = True) -> NormalizedCV:
         """Extraire un NormalizedCV depuis un PDF, avec fallback automatique.
 
         Cascade à 3 niveaux :
           1. pdfplumber confiance ≥ 0.85 → retourner directement
           2. pdfplumber < 0.85 → OCR ; OCR gagne si +10 % de mots
              si confiance résultante ≥ 0.85 → pas de Vision LLM
-          3. confiance < 0.85 + clé Anthropic → Vision LLM
-             Vision LLM gagne si son score de richesse structurelle
-             dépasse celui du meilleur résultat pdfplumber/OCR
+          3. confiance < 0.85 + clé Anthropic + VISION_LLM_ENABLED + allow_vision
+             → Vision LLM. Vision LLM gagne si son score de richesse
+             structurelle dépasse celui du meilleur résultat pdfplumber/OCR
+
+        `allow_vision` permet à l'appelant de désactiver le niveau 3 pour cet
+        appel (ex. quota Vision LLM par session déjà atteint), indépendamment
+        de la configuration globale.
 
         Le layout_detected est toujours calculé depuis les données pdfplumber
         réelles et injecté dans le résultat final, quelle que soit la méthode
@@ -252,7 +256,7 @@ class CVTransformer:
                                    layout_detected=real_layout)
 
         # --- Niveau 3 : Vision LLM (comparaison par richesse structurelle) ---
-        if settings.anthropic_api_key:
+        if settings.anthropic_api_key and settings.vision_llm_enabled and allow_vision:
             logger.info("cascade | niveau 3 → Vision LLM déclenché (conf %.2f < %.2f)",
                         best_confidence, _CONFIDENCE_THRESHOLD)
             best_richness = _vision_richness_score(best_cv)
@@ -274,7 +278,10 @@ class CVTransformer:
             except Exception as exc:
                 logger.warning("cascade | Vision LLM échoué : %s", exc)
         else:
-            logger.info("cascade | niveau 3 ignoré (pas de clé Anthropic)")
+            logger.info(
+                "cascade | niveau 3 ignoré (clé=%s, vision_llm_enabled=%s, allow_vision=%s)",
+                bool(settings.anthropic_api_key), settings.vision_llm_enabled, allow_vision,
+            )
 
         return best_cv
 

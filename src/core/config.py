@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     )
 
     anthropic_api_key: str = ""
+    vision_llm_enabled: bool = False
     claude_model: str = "claude-sonnet-4-6"
     spacy_model: str = "en_core_web_sm"
     sentence_transformer_model: str = "all-MiniLM-L6-v2"

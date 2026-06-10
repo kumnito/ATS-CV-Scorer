@@ -10,7 +10,7 @@ import gradio_client.utils as _gradio_client_utils
 
 from src.core.config import settings
 from src.core.schemas import CVQualityReport, NormalizedCV
-from src.services.claude_feedback import ClaudeFeedback
+from src.services.claude_feedback import ClaudeBudgetExceeded, ClaudeFeedback
 from src.services.cv_quality_scorer import CVQualityScorer
 from src.services.cv_transformer import CVTransformer
 from src.services.job_matcher import FRANCE_REGIONS, find_matching_jobs
@@ -47,6 +47,16 @@ _job_search_service = JobSearchService(
 )
 
 MAX_JOB_RESULTS = 10
+
+# Limites par session (gr.State) pour protéger le budget ANTHROPIC_API_KEY de la démo.
+MAX_VISION_CALLS_PER_SESSION = 3
+MAX_FEEDBACK_CALLS_PER_SESSION = 5
+
+_DEMO_LIMIT_MD = (
+    "⚠️ **Limite de la démo atteinte.** Pour un usage illimité, clonez le projet "
+    "et ajoutez votre propre clé API.\n\n"
+    "[📦 Voir le projet sur GitHub](https://github.com/kumnito/ATS-CV-Scorer)"
+)
 
 
 def _score_color(score: float) -> str:
@@ -209,19 +219,24 @@ def _format_cv_context_strip(parsed_cv, report: CVQualityReport) -> str:
 
 # ── Handler 1 : traitement du CV ─────────────────────────────────────────────
 
-def on_cv_upload(cv_file):
+def on_cv_upload(cv_file, vision_calls):
     _reset = (
         "", "", "",          # quality_md, timeline_md, profile_md
         None, None, None,    # parsed_cv_state, normalized_cv_state, quality_report_state
         "⚠️ Uploadez votre CV en onglet 1 pour commencer.",  # cv_context_md
         gr.update(interactive=False),                         # search_btn
         gr.update(value=""),                                  # job_title_input
+        vision_calls,                                         # vision_calls_state
     )
 
     if cv_file is None:
         return _reset
 
-    normalized_cv = _cv_transformer.transform(cv_file.name)
+    allow_vision = vision_calls < MAX_VISION_CALLS_PER_SESSION
+    normalized_cv = _cv_transformer.transform(cv_file.name, allow_vision=allow_vision)
+    if normalized_cv.extraction_method == "vision_llm":
+        vision_calls += 1
+
     if not normalized_cv.raw_text:
         return (
             "❌ Impossible d'extraire le texte du PDF.",
@@ -230,13 +245,18 @@ def on_cv_upload(cv_file):
             "❌ Échec de l'extraction PDF — vérifiez que le fichier n'est pas protégé.",
             gr.update(interactive=False),
             gr.update(value=""),
+            vision_calls,
         )
 
     parsed_cv = _nlp_pipeline.parse_normalized(normalized_cv)
     quality_report = _cv_quality_scorer.score(normalized_cv)
 
+    quality_md = _format_quality_report(normalized_cv, quality_report)
+    if not allow_vision and normalized_cv.extraction_confidence < 0.85:
+        quality_md += f"\n\n---\n\n{_DEMO_LIMIT_MD}"
+
     return (
-        _format_quality_report(normalized_cv, quality_report),
+        quality_md,
         _format_timeline(normalized_cv, quality_report),
         _format_profile_summary(parsed_cv, normalized_cv),
         parsed_cv,
@@ -245,6 +265,7 @@ def on_cv_upload(cv_file):
         _format_cv_context_strip(parsed_cv, quality_report),
         gr.update(interactive=True),
         gr.update(value=parsed_cv.job_title or ""),
+        vision_calls,
     )
 
 
@@ -255,6 +276,7 @@ def on_cv_clear():
         "⚠️ Uploadez votre CV en onglet 1 pour commencer.",
         gr.update(interactive=False),
         gr.update(value=""),
+        0,
     )
 
 
@@ -383,12 +405,16 @@ _ANALYZE_LOADING_MD = (
 
 
 def _make_analyze_handler(index: int):
-    def _analyze_one(parsed_cv, matches):
+    def _analyze_one(parsed_cv, matches, feedback_calls):
         if not matches or index >= len(matches):
-            yield gr.update(value="", visible=False)
+            yield gr.update(value="", visible=False), feedback_calls
             return
 
-        yield gr.update(value=_ANALYZE_LOADING_MD, visible=True)
+        if feedback_calls >= MAX_FEEDBACK_CALLS_PER_SESSION:
+            yield gr.update(value=_DEMO_LIMIT_MD, visible=True), feedback_calls
+            return
+
+        yield gr.update(value=_ANALYZE_LOADING_MD, visible=True), feedback_calls
 
         match = matches[index]
         try:
@@ -396,14 +422,17 @@ def _make_analyze_handler(index: int):
             feedback = cf.generate_feedback(
                 parsed_cv, match.job.description, match.scoring_result
             )
+            feedback_calls += 1
         except ValueError:
             feedback = (
                 "⚠️ Configurez `ANTHROPIC_API_KEY` dans le fichier `.env` pour générer "
                 "un feedback personnalisé pour cette offre."
             )
+        except ClaudeBudgetExceeded:
+            feedback = "⚠️ Service IA temporairement indisponible — réessayez plus tard."
         except Exception as exc:
             feedback = f"⚠️ Feedback Claude indisponible : {exc}"
-        yield gr.update(value=feedback, visible=True)
+        yield gr.update(value=feedback, visible=True), feedback_calls
 
     return _analyze_one
 
@@ -420,6 +449,8 @@ with gr.Blocks(
     normalized_cv_state = gr.State(None)
     quality_report_state = gr.State(None)
     matches_state = gr.State([])
+    vision_calls_state = gr.State(0)
+    feedback_calls_state = gr.State(0)
 
     with gr.Tabs():
 
@@ -490,9 +521,12 @@ with gr.Blocks(
         cv_context_md,
         search_btn,
         job_title_input,
+        vision_calls_state,
     ]
 
-    cv_input.upload(fn=on_cv_upload, inputs=[cv_input], outputs=_upload_outputs)
+    cv_input.upload(
+        fn=on_cv_upload, inputs=[cv_input, vision_calls_state], outputs=_upload_outputs
+    )
     cv_input.clear(fn=on_cv_clear, outputs=_upload_outputs)
 
     _search_outputs = [search_status_md, matches_state, search_query_md]
@@ -508,8 +542,8 @@ with gr.Blocks(
     for idx, (_, _, slot_analyze_btn, slot_feedback_md) in enumerate(job_slots):
         slot_analyze_btn.click(
             fn=_make_analyze_handler(idx),
-            inputs=[parsed_cv_state, matches_state],
-            outputs=[slot_feedback_md],
+            inputs=[parsed_cv_state, matches_state, feedback_calls_state],
+            outputs=[slot_feedback_md, feedback_calls_state],
         )
 
 if __name__ == "__main__":

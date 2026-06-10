@@ -1,4 +1,4 @@
-.PHONY: install run dev test lint format clean update-lexicons install-ocr benchmark
+.PHONY: install install-dev run dev test lint format clean update-lexicons install-ocr benchmark
 
 VENV := .venv
 PYTHON := $(VENV)/bin/python
@@ -11,13 +11,16 @@ $(VENV)/bin/activate:
 install: $(VENV)/bin/activate
 	$(PIP) install -r requirements.txt
 
+install-dev: install
+	$(PIP) install -r requirements-dev.txt
+
 run: install
 	$(PYTHON) app.py
 
 dev: install
 	$(VENV)/bin/uvicorn src.api.server:app --reload --port 8000
 
-test: install
+test: install-dev
 	$(VENV)/bin/pytest tests/ -v
 
 lint: install
@@ -33,7 +36,7 @@ install-ocr: install
 	sudo apt-get install -y tesseract-ocr tesseract-ocr-fra poppler-utils
 	$(PIP) install pytesseract pdf2image Pillow
 
-benchmark: install
+benchmark: install-dev
 	$(PYTHON) tests/benchmark_ats.py
 
 clean:

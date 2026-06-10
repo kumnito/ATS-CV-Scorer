@@ -27,11 +27,6 @@ python-dotenv==1.0.1
 numpy<2.0
 scikit-learn==1.5.2
 
-# Dev & tests
-pytest==8.3.4
-fpdf2>=2.8.0
-reportlab>=4.0.0
-
 # Lexicon builder — HuggingFace dataset source (make update-lexicons)
 datasets>=2.0
 

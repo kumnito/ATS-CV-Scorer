@@ -37,6 +37,8 @@ async def health():
     return {"status": "ok"}
 
 
+# Kept for external API integration (ATS plugins, HR tools)
+# Not exposed in Gradio UI — available via REST only
 @app.post("/score", response_model=ATSResponse)
 async def score_cv(
     cv_file: UploadFile = File(..., description="PDF résumé/CV"),

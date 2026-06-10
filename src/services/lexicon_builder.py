@@ -21,11 +21,24 @@ _ESCO_BASE = "https://ec.europa.eu/esco/api"
 _OUTPUT_PATH = Path(__file__).parent.parent.parent / "lexicons_generated.json"
 
 _TARGET_OCCUPATIONS: list[str] = [
+    # Tech / data
     "machine learning engineer",
     "data engineer",
     "software developer",
     "data analyst",
     "mlops engineer",
+    # Vente / commerce
+    "sales representative",
+    "commercial",
+    # RH
+    "human resources manager",
+    "recruitment consultant",
+    # Ingénierie généraliste
+    "civil engineer",
+    "mechanical engineer",
+    # Santé / fitness
+    "fitness trainer",
+    "healthcare worker",
 ]
 
 # Words so generic that they cannot disambiguate an occupation query from its

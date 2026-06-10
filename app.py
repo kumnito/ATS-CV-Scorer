@@ -1,3 +1,4 @@
+# TODO: migrate to ruff before HF Spaces deployment
 """Hugging Face Spaces entry point — Gradio interface for ATS CV Scorer."""
 
 import logging

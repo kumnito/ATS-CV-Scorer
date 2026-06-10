@@ -317,8 +317,14 @@ def _has_action_signals(cv: NormalizedCV) -> bool:
 def _parse_ym(date_str: Optional[str]) -> Optional[tuple[int, int]]:
     if not date_str or date_str == "present":
         return None
-    parts = date_str.split("-")
-    return (int(parts[0]), int(parts[1]) if len(parts) > 1 else 1)
+    try:
+        if "/" in date_str:
+            month, year = date_str.split("/")
+            return (int(year), int(month))
+        parts = date_str.split("-")
+        return (int(parts[0]), int(parts[1]) if len(parts) > 1 else 1)
+    except ValueError:
+        return None
 
 
 def _career_stats(cv: NormalizedCV) -> dict:
@@ -327,9 +333,9 @@ def _career_stats(cv: NormalizedCV) -> dict:
 
     start_years = []
     for e in cv.experience:
-        if e.date_start:
-            parts = e.date_start.split("-")
-            start_years.append(int(parts[0]))
+        parsed = _parse_ym(e.date_start)
+        if parsed:
+            start_years.append(parsed[0])
     career_start = min(start_years) if start_years else None
 
     most_recent = None

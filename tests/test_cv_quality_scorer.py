@@ -307,6 +307,20 @@ def test_career_gaps_detected_for_long_gap(scorer):
     assert "2017" in report.career_gaps[0]
 
 
+def test_score_handles_mm_yyyy_dates_without_crashing(scorer):
+    """Le Vision LLM peut renvoyer des dates au format MM/YYYY au lieu de YYYY-MM."""
+    cv = NormalizedCV(
+        experience=[
+            CVExperience(date_start="06/2010", date_end="06/2015", duration_months=60),
+            CVExperience(date_start="2017-01", date_end="2020-01", duration_months=36),
+        ],
+        raw_text="x",
+        word_count=1,
+    )
+    report = scorer.score(cv)
+    assert report.career_start_year == 2010
+
+
 # ---------------------------------------------------------------------------
 # Action nouns FR (nouveaux signaux acceptés)
 # ---------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-.PHONY: install run dev test lint format clean update-lexicons install-ocr
+.PHONY: install run dev test lint format clean update-lexicons install-ocr benchmark
 
 VENV := .venv
 PYTHON := $(VENV)/bin/python
@@ -32,6 +32,9 @@ update-lexicons: install
 install-ocr: install
 	sudo apt-get install -y tesseract-ocr tesseract-ocr-fra poppler-utils
 	$(PIP) install pytesseract pdf2image Pillow
+
+benchmark: install
+	$(PYTHON) tests/benchmark_ats.py
 
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} +

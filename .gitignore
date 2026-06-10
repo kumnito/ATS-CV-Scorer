@@ -13,3 +13,4 @@ venv/
 *.pdf
 uploads/
 lexicons_generated.json
+tests/fixtures/benchmark_report.csv

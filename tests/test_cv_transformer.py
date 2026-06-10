@@ -76,6 +76,36 @@ def test_single_col_skills_have_python(single_col_cv):
     assert "python" in all_skills
 
 
+def test_parse_skills_adds_semantic_matches_to_other(transformer):
+    with patch(
+        "src.services.cv_transformer.match_semantic_skills",
+        return_value=["customer relationship management"],
+    ):
+        skills = transformer._parse_skills("Some CV text about managing client accounts.")
+
+    assert "customer relationship management" in skills.other
+
+
+def test_parse_skills_does_not_duplicate_substring_matches(transformer):
+    with patch(
+        "src.services.cv_transformer.match_semantic_skills",
+        return_value=["python"],
+    ):
+        skills = transformer._parse_skills("Experienced Python developer.")
+
+    assert skills.other.count("python") == 0
+    assert skills.flat().count("python") == 1
+
+
+def test_parse_skills_passes_custom_semantic_threshold(transformer):
+    with patch(
+        "src.services.cv_transformer.match_semantic_skills", return_value=[]
+    ) as mock_match:
+        transformer._parse_skills("Some text here", semantic_threshold=0.7)
+
+    mock_match.assert_called_once_with("Some text here", threshold=0.7)
+
+
 def test_single_col_header_has_email(single_col_cv):
     assert single_col_cv.header.email is not None
 

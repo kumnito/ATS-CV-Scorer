@@ -13,4 +13,5 @@ venv/
 *.pdf
 uploads/
 lexicons_generated.json
+lexicons_embeddings.npy
 tests/fixtures/benchmark_report.csv

@@ -74,6 +74,65 @@ def run_benchmark(
     return rows
 
 
+CALIBRATION_THRESHOLDS = [0.45, 0.50, 0.55, 0.60, 0.65, 0.70]
+
+# Synth CVs with clearly tech vocabulary — used to detect false positives
+# (non-tech ESCO phrases semantically matched against a tech CV).
+SYNTH_TECH_CVS = [
+    "synth_single_column_backend_engineer.pdf",
+    "synth_two_columns_data_analyst.pdf",
+]
+
+
+def run_calibration(sample_dir: Path = SAMPLE_DIR) -> None:
+    """Compare semantic skill match thresholds on the benchmark corpus.
+
+    For each candidate threshold: average ProfileStrength score for HF CVs,
+    average for synth CVs, and the count of semantically-matched ESCO
+    phrases on SYNTH_TECH_CVS (proxy for false positives — these CVs are
+    already well-scored via substring matching, so new semantic matches
+    there are likely noise).
+    """
+    transformer = CVTransformer()
+    scorer = CVQualityScorer()
+    patch("src.core.config.settings.anthropic_api_key", "").start()
+
+    cvs = {}
+    for pdf_path in sorted(sample_dir.glob("*.pdf")):
+        cvs[pdf_path.name] = transformer.transform(str(pdf_path))
+
+    print(
+        f"{'threshold':>9} | {'avg HF':>6} | {'avg synth':>9} | {'tech false positives':>20}"
+    )
+    print("-" * 9 + "-+-" + "-" * 6 + "-+-" + "-" * 9 + "-+-" + "-" * 20)
+
+    for threshold in CALIBRATION_THRESHOLDS:
+        hf_scores: list[int] = []
+        synth_scores: list[int] = []
+        false_positives = 0
+
+        for name, cv in cvs.items():
+            skills = transformer._parse_skills(
+                cv.raw_text, semantic_threshold=threshold
+            )
+            cv_variant = cv.model_copy(update={"skills": skills})
+            score = scorer.score(cv_variant).profile_strength.score
+
+            if name.startswith("hf_"):
+                hf_scores.append(score)
+            elif name.startswith("synth_"):
+                synth_scores.append(score)
+
+            if name in SYNTH_TECH_CVS:
+                false_positives += len(skills.other)
+
+        avg_hf = round(sum(hf_scores) / len(hf_scores), 1) if hf_scores else 0.0
+        avg_synth = (
+            round(sum(synth_scores) / len(synth_scores), 1) if synth_scores else 0.0
+        )
+        print(f"{threshold:>9} | {avg_hf:>6} | {avg_synth:>9} | {false_positives:>20}")
+
+
 def write_csv(rows: list[dict], output_path: Path = OUTPUT_CSV) -> None:
     with open(output_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
@@ -109,7 +168,19 @@ def main() -> None:
             "Claude réels et facturés). Désactivé par défaut."
         ),
     )
+    parser.add_argument(
+        "--calibrate",
+        action="store_true",
+        help=(
+            "Compare les seuils de matching sémantique des compétences "
+            f"({CALIBRATION_THRESHOLDS}) au lieu de lancer le benchmark normal."
+        ),
+    )
     args = parser.parse_args()
+
+    if args.calibrate:
+        run_calibration()
+        return
 
     rows = run_benchmark(allow_vision_llm=args.with_vision_llm)
     print_table(rows)

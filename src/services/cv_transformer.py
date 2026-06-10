@@ -34,6 +34,7 @@ from src.core.schemas import (
     CVSkills,
     NormalizedCV,
 )
+from src.services.semantic_skill_matcher import match_semantic_skills
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -920,13 +921,25 @@ class CVTransformer:
             linkedin=linkedin,
         )
 
-    def _parse_skills(self, raw_text: str) -> CVSkills:
+    def _parse_skills(
+        self, raw_text: str, semantic_threshold: Optional[float] = None
+    ) -> CVSkills:
         text_lower = raw_text.lower()
         result: dict[str, list[str]] = {cat: [] for cat in SKILL_CATEGORIES}
         for cat, skill_list in SKILL_CATEGORIES.items():
             for skill in skill_list:
                 if re.search(r"\b" + re.escape(skill.lower()) + r"\b", text_lower):
                     result[cat].append(skill)
+
+        # ESCO multi-word phrases (e.g. "produce sales reports") rarely appear
+        # verbatim — matched semantically instead of by substring.
+        existing = {s.lower() for skills in result.values() for s in skills}
+        kwargs = {} if semantic_threshold is None else {"threshold": semantic_threshold}
+        for phrase in match_semantic_skills(raw_text, **kwargs):
+            if phrase.lower() not in existing:
+                result.setdefault("other", []).append(phrase)
+                existing.add(phrase.lower())
+
         return CVSkills(**result)
 
     def _parse_experience(self, lines: list[_Line]) -> list[CVExperience]:

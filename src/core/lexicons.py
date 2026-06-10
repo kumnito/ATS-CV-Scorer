@@ -8,6 +8,17 @@ with hardcoded entries taking priority — no regressions possible.
 import json
 import re
 from pathlib import Path
+from typing import Optional
+
+import numpy as np
+
+# Cosine-similarity threshold for matching ESCO multi-word skill phrases
+# (e.g. "produce sales reports") against CV text via sentence-transformers.
+# Calibrated on the benchmark corpus (make benchmark --calibrate): 0.51 is
+# the lowest value that brings the HF non-tech average to "Correct" (>=50)
+# while avoiding the worst false positives (e.g. "sales promotion
+# techniques" on a backend-engineer CV) without regressing synth_* CVs.
+SEMANTIC_SKILL_MATCH_THRESHOLD: float = 0.51
 
 SECTION_HEADERS: dict[str, str] = {
     "summary": r"^(summary|objective|profile|about me|professional summary|career objective|executive summary|about|profil|accroche|résumé|présentation|à propos)",
@@ -320,11 +331,39 @@ JOB_TITLES: list[str] = []
 # Merge generated lexicons at import time (silent fallback if file absent)
 # ---------------------------------------------------------------------------
 
+# ESCO multi-word skill phrases eligible for semantic matching (e.g. "produce
+# sales reports"), and their precomputed sentence-transformers embeddings.
+# Populated by _load_generated_embeddings() if lexicons_embeddings.npy exists
+# and matches embedded_skills (both produced by `make update-lexicons`).
+GENERATED_SKILL_PHRASES: list[str] = []
+GENERATED_SKILL_EMBEDDINGS: Optional[np.ndarray] = None
+
+_EMBEDDINGS_PATH = Path(__file__).parent.parent.parent / "lexicons_embeddings.npy"
+
+
+def _load_generated_embeddings(embedded_skills: list[str]) -> None:
+    global GENERATED_SKILL_PHRASES, GENERATED_SKILL_EMBEDDINGS
+    if not embedded_skills or not _EMBEDDINGS_PATH.exists():
+        return
+    try:
+        embeddings = np.load(_EMBEDDINGS_PATH)
+    except (OSError, ValueError):
+        return
+    if embeddings.shape[0] != len(embedded_skills):
+        return
+    GENERATED_SKILL_PHRASES = embedded_skills
+    GENERATED_SKILL_EMBEDDINGS = embeddings
+
+
 def _merge_generated() -> tuple[list[str], list[str]]:
     """Load lexicons_generated.json and merge into module-level structures.
 
     Returns (extra_verbs_en, extra_verbs_fr) — new verbs not already in the
     hardcoded base sets, to be unioned into the final ACTION_VERBS frozensets.
+
+    As a side effect, populates GENERATED_SKILL_PHRASES and
+    GENERATED_SKILL_EMBEDDINGS for semantic skill matching (see
+    src/services/semantic_skill_matcher.py).
     """
     _path = Path(__file__).parent.parent.parent / "lexicons_generated.json"
     if not _path.exists():
@@ -333,6 +372,8 @@ def _merge_generated() -> tuple[list[str], list[str]]:
         data = json.loads(_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return [], []
+
+    _load_generated_embeddings(data.get("embedded_skills", []))
 
     # Skills: extend each category with generated entries not in hardcoded set.
     hardcoded_skills: set[str] = {

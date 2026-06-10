@@ -14,11 +14,13 @@ from pathlib import Path
 from typing import Optional
 
 import httpx
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
 _ESCO_BASE = "https://ec.europa.eu/esco/api"
 _OUTPUT_PATH = Path(__file__).parent.parent.parent / "lexicons_generated.json"
+_EMBEDDINGS_PATH = Path(__file__).parent.parent.parent / "lexicons_embeddings.npy"
 
 _TARGET_OCCUPATIONS: list[str] = [
     # Tech / data
@@ -177,9 +179,11 @@ class LexiconBuilder:
         self,
         output_path: Path = _OUTPUT_PATH,
         timeout: float = 15.0,
+        embeddings_output: Path = _EMBEDDINGS_PATH,
     ) -> None:
         self._output = Path(output_path)
         self._timeout = timeout
+        self._embeddings_output = Path(embeddings_output)
 
     def build(self, force_refresh: bool = False) -> dict:
         """Fetch lexicons from all sources and persist to JSON.
@@ -216,10 +220,46 @@ class LexiconBuilder:
             except Exception as exc:
                 logger.warning("Skipping %s source: %s", source_name, exc)
 
+        result["embedded_skills"] = self._compute_embeddings(result)
+
         self._output.write_text(
             json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
         )
         return result
+
+    # ------------------------------------------------------------------
+    # Semantic embeddings for multi-word ESCO skill phrases
+    # ------------------------------------------------------------------
+
+    def _compute_embeddings(self, result: dict) -> list[str]:
+        """Embed multi-word skill phrases for semantic matching.
+
+        Single-word skills already match well via substring (see ALL_SKILLS)
+        and are excluded here. Returns the ordered phrase list whose rows
+        match lexicons_embeddings.npy.
+        """
+        phrases = sorted(
+            {
+                skill
+                for skills in result["skill_categories"].values()
+                for skill in skills
+                if len(skill.split()) >= 2
+            }
+        )
+        if not phrases:
+            return []
+
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as exc:
+            logger.warning("Skipping skill embeddings: %s", exc)
+            return []
+
+        model = SentenceTransformer("all-MiniLM-L6-v2")
+        embeddings = model.encode(phrases, convert_to_numpy=True)
+        np.save(self._embeddings_output, embeddings)
+        logger.info("Saved %d skill embeddings to %s", len(phrases), self._embeddings_output)
+        return phrases
 
     # ------------------------------------------------------------------
     # ESCO source (Priority 1)

@@ -65,28 +65,239 @@ _DEMO_LIMIT_MD = (
     "[📦 Voir le projet sur GitHub](https://github.com/kumnito/ATS-CV-Scorer)"
 )
 
+# ── Thème & CSS — Tech Dashboard ─────────────────────────────────────────────
+
+THEME = gr.themes.Base(
+    primary_hue=gr.themes.colors.indigo,
+    secondary_hue=gr.themes.colors.slate,
+    neutral_hue=gr.themes.colors.slate,
+    font=gr.themes.GoogleFont("Inter"),
+    # gr.themes.Base (4.44.0) only wraps font_mono in a list when it's a str —
+    # a bare GoogleFont object hits `for fontfam in font_mono` on a non-iterable.
+    font_mono=[gr.themes.GoogleFont("JetBrains Mono")],
+)
+
+# Palette propre à l'app (indépendante des variables internes du thème Gradio,
+# pour un rendu stable quel que soit le thème de base).
+CUSTOM_CSS = """
+.gradio-container {
+    --app-bg-tint: #f8fafc;
+    --app-border: #e2e8f0;
+    --app-card-bg: #ffffff;
+    --app-text-secondary: #64748b;
+    --app-badge-bg: #eef2ff;
+    --app-badge-text: #4338ca;
+    background: var(--app-bg-tint);
+}
+
+/* Cards résultats */
+.result-card, .metric-card {
+    border: 0.5px solid var(--app-border);
+    border-radius: 12px;
+    padding: 1.25rem;
+    background: var(--app-card-bg);
+}
+
+/* Grille de métriques (4 cards horizontales) */
+.metrics-grid {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+}
+.metric-card {
+    flex: 1;
+    min-width: 150px;
+}
+.metric-label {
+    font-size: 12px;
+    color: var(--app-text-secondary);
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.metric-value {
+    font-size: 28px;
+    font-weight: 600;
+    line-height: 1.2;
+}
+.metric-sub {
+    font-size: 12px;
+    color: var(--app-text-secondary);
+    margin-top: 2px;
+}
+
+/* Onglets — accent indigo sur l'onglet actif */
+.tab-nav button.selected, div[role="tablist"] button.selected {
+    border-bottom: 2px solid #6366f1 !important;
+    color: #4338ca !important;
+    font-weight: 600;
+}
+
+/* Bouton "Analyser" — style outline discret */
+.analyze-outline {
+    background: transparent !important;
+    border: 1px solid var(--app-border) !important;
+    color: var(--app-text-secondary) !important;
+}
+.analyze-outline:hover {
+    border-color: #6366f1 !important;
+    color: #4338ca !important;
+}
+
+/* Zone d'upload du CV */
+.cv-upload .wrap {
+    border: 1.5px dashed var(--app-border) !important;
+    border-radius: 12px;
+    transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+.cv-upload .wrap:hover {
+    border-color: #6366f1 !important;
+    background-color: var(--app-badge-bg);
+}
+
+/* Badges génériques */
+.skill-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 8px;
+    background: var(--app-badge-bg);
+    color: var(--app-badge-text);
+    margin: 2px;
+}
+.extraction-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 4px 10px;
+    border-radius: 8px;
+    margin-bottom: 0.75rem;
+}
+
+/* Timeline carrière */
+.timeline-entry {
+    display: flex;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 0.5px solid var(--app-border);
+}
+.timeline-entry:last-child {
+    border-bottom: none;
+}
+.timeline-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-top: 4px;
+    flex-shrink: 0;
+}
+.timeline-title {
+    font-weight: 500;
+}
+.timeline-meta {
+    font-size: 12px;
+    color: var(--app-text-secondary);
+}
+.timeline-badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 8px;
+    background: var(--app-badge-bg);
+    color: var(--app-text-secondary);
+    align-self: center;
+    white-space: nowrap;
+}
+"""
+
 
 def _score_color(score: float) -> str:
     return "🟢" if score >= 70 else ("🟡" if score >= 45 else "🔴")
 
 
-def _bar(value: int, max_val: int = 100, width: int = 20) -> str:
-    filled = round(value / max_val * width)
-    return "█" * filled + "░" * (width - filled)
+def _score_color_hex(score: float) -> str:
+    if score >= 70:
+        return "#22c55e"
+    if score >= 50:
+        return "#f59e0b"
+    return "#ef4444"
+
+
+def _progress_bar_html(label: str, value: int, color: str = "#6366f1", max_val: int = 100) -> str:
+    pct = max(0, min(100, round(value / max_val * 100)))
+    return (
+        '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">'
+        f'<span style="width:80px;font-size:12px;color:var(--app-text-secondary)">{label}</span>'
+        '<div style="flex:1;height:6px;background:var(--app-border);border-radius:3px">'
+        f'<div style="width:{pct}%;height:100%;background:{color};border-radius:3px"></div>'
+        "</div>"
+        f'<span style="font-size:12px;font-weight:500;width:32px;text-align:right">{value}</span>'
+        "</div>"
+    )
+
+
+def _metric_card(label: str, value: str, sub: str) -> str:
+    return (
+        '<div class="metric-card">'
+        f'<div class="metric-label">{label}</div>'
+        f'<div class="metric-value">{value}</div>'
+        f'<div class="metric-sub">{sub}</div>'
+        "</div>"
+    )
+
+
+def _extraction_badge_html(report: CVQualityReport) -> str:
+    m, c = report.extraction_method, report.extraction_confidence
+    if m == "pdfplumber":
+        bg, color, label = "#dcfce7", "#16a34a", "✅ Extraction native"
+    elif m == "ocr":
+        bg, color, label = "#fef3c7", "#b45309", "⚠️ Extraction OCR"
+    else:
+        bg, color, label = "#e0e7ff", "#4338ca", "🤖 Extraction Vision IA"
+    return (
+        f'<span class="extraction-badge" style="background:{bg};color:{color}">'
+        f"{label} · confiance {c:.0%}</span>"
+    )
+
+
+def _skill_badge(skill: str) -> str:
+    return f'<span class="skill-badge">{skill}</span>'
+
+
+_SKILL_CATEGORY_LABELS = {
+    "ml": "ML",
+    "mlops": "MLOps",
+    "cloud": "Cloud",
+    "data": "Data",
+    "languages": "Langages",
+    "other": "Autres",
+    "commerce": "Commerce",
+}
+
+
+def _format_skill_badges(cv: NormalizedCV) -> str:
+    skills_dict = cv.skills.model_dump()
+    parts = []
+    for key, label in _SKILL_CATEGORY_LABELS.items():
+        values = skills_dict.get(key, [])
+        if not values:
+            continue
+        badges = "".join(_skill_badge(s) for s in values)
+        parts.append(
+            f'<div style="margin-bottom:6px"><strong style="font-size:12px">{label}</strong><br>{badges}</div>'
+        )
+    if not parts:
+        return "<em>Aucune compétence détectée</em>"
+    return "".join(parts)
 
 
 def _format_quality_report(cv: NormalizedCV, report: CVQualityReport) -> str:
     ats = report.ats_readability
     ps = report.profile_strength
-
-    # Cellule extraction
-    m, c = report.extraction_method, report.extraction_confidence
-    if m == "pdfplumber":
-        ext_label = f"{'✅' if c >= 0.85 else '⚠️'} Extraction native ({c:.0%})"
-    elif m == "ocr":
-        ext_label = f"⚠️ OCR Tesseract ({c:.0%})"
-    else:
-        ext_label = f"🤖 Vision IA Claude ({c:.0%})"
 
     sections_str = " · ".join(ats.sections_found) if ats.sections_found else "—"
     readability_label = "✅ Oui" if ats.is_machine_readable else f"⚠️ Non ({cv.word_count} mots < 150)"
@@ -97,10 +308,7 @@ def _format_quality_report(cv: NormalizedCV, report: CVQualityReport) -> str:
     ]
     if ats.sections_missing:
         table_rows.append(f"| Sections manquantes | ❌ {' · '.join(ats.sections_missing)} |")
-    table_rows += [
-        f"| Extraction | {ext_label} |",
-        f"| Lisibilité machine | {readability_label} |",
-    ]
+    table_rows.append(f"| Lisibilité machine | {readability_label} |")
 
     lines = [
         "## 📋 Lisibilité ATS",
@@ -115,7 +323,7 @@ def _format_quality_report(cv: NormalizedCV, report: CVQualityReport) -> str:
     level_emoji = {"Solide": "🟢", "Correct": "🟡", "À renforcer": "🔴"}.get(ps.level, "")
     lines += [
         f"## 💼 Solidité du profil — {level_emoji} {ps.level}",
-        f"`{_bar(ps.score)}` {ps.score}/100",
+        _progress_bar_html("Profil", ps.score, color=_score_color_hex(ps.score)),
         "",
     ]
     if ps.strengths:
@@ -145,50 +353,83 @@ def _format_quality_report(cv: NormalizedCV, report: CVQualityReport) -> str:
     return "\n".join(lines)
 
 
+def _format_metrics_html(cv: NormalizedCV, report: CVQualityReport) -> str:
+    ats = report.ats_readability
+    ps = report.profile_strength
+
+    layout_icon = "✅" if ats.layout == "single_column" else "⚠️"
+    layout_sub = "1 colonne" if ats.layout == "single_column" else "2 colonnes"
+
+    skills_count = len(cv.skills.flat())
+    density = round(skills_count / max(cv.word_count, 1) * 100)
+
+    exp_value = f"{report.total_experience_years:.0f} an(s)" if report.total_experience_years else "—"
+    exp_sub = f"depuis {report.career_start_year}" if report.career_start_year else "—"
+
+    cards = [
+        _metric_card("Lisibilité ATS", layout_icon, layout_sub),
+        _metric_card("Profil", f"{ps.score}/100", ps.level),
+        _metric_card("Mots-clés", f"{density}%", f"{skills_count} skills"),
+        _metric_card("Expérience", exp_value, exp_sub),
+    ]
+    return _extraction_badge_html(report) + f'<div class="metrics-grid">{"".join(cards)}</div>'
+
+
+def _timeline_entry_html(dot_color: str, title: str, meta: str, badge: str = "") -> str:
+    badge_html = f'<span class="timeline-badge">{badge}</span>' if badge else ""
+    return (
+        '<div class="timeline-entry">'
+        f'<div class="timeline-dot" style="background:{dot_color}"></div>'
+        '<div style="flex:1">'
+        f'<div class="timeline-title">{title}</div>'
+        f'<div class="timeline-meta">{meta}</div>'
+        "</div>"
+        f"{badge_html}"
+        "</div>"
+    )
+
+
 def _format_timeline(cv: NormalizedCV, report: CVQualityReport) -> str:
     if not cv.experience and not cv.education:
         return ""
 
-    lines = ["## 📅 Timeline carrière"]
+    header_lines = ["## 📅 Timeline carrière"]
     if report.total_experience_years > 0:
-        lines.append(f"**Expérience totale : {report.total_experience_years:.1f} an(s)**")
+        header_lines.append(f"**Expérience totale : {report.total_experience_years:.1f} an(s)**")
     if report.career_start_year:
-        lines.append(f"Premier poste détecté : {report.career_start_year}")
-    lines.append("")
+        header_lines.append(f"Premier poste détecté : {report.career_start_year}")
 
     events: list[tuple[int, int, str]] = []
     for e in cv.experience:
         label_parts = [p for p in [e.title, e.company] if p]
-        label = " @ ".join(label_parts) if label_parts else "Poste non détecté"
-        dur = f" ({e.years:.0f} an(s))" if e.years else ""
+        title = " @ ".join(label_parts) if label_parts else "Poste non détecté"
+        badge = f"{e.years:.0f} an(s)" if e.years else ""
         period = e.period or (
             f"{e.date_start or '?'} – {'présent' if e.is_current else (e.date_end or '?')}"
         )
         s_year = int(e.date_start.split("-")[0]) if e.date_start else 0
         s_month = int(e.date_start.split("-")[1]) if e.date_start and "-" in e.date_start else 1
-        events.append((s_year, s_month, f"💼 **{period}** : {label}{dur}"))
+        events.append((s_year, s_month, _timeline_entry_html("#22c55e", title, period, badge)))
 
     for e in cv.education:
-        label = " — ".join(p for p in [e.degree, e.school] if p) or "Formation non détectée"
-        dur = f" ({round((e.duration_months or 0) / 12):.0f} an(s))" if e.duration_months else ""
+        title = " — ".join(p for p in [e.degree, e.school] if p) or "Formation non détectée"
+        badge = f"{round((e.duration_months or 0) / 12):.0f} an(s)" if e.duration_months else ""
         period = e.year or (
             f"{e.date_start or '?'} – {'présent' if e.is_current else (e.date_end or '?')}"
         )
         s_year = int(e.date_start.split("-")[0]) if e.date_start else 0
         s_month = int(e.date_start.split("-")[1]) if e.date_start and "-" in e.date_start else 1
-        events.append((s_year, s_month, f"🎓 **{period}** : {label}{dur}"))
+        events.append((s_year, s_month, _timeline_entry_html("#6366f1", title, period, badge)))
 
     events.sort(key=lambda x: (x[0], x[1]), reverse=True)
-    for _, _, label in events:
-        lines.append(f"- {label}")
+    entries_html = [html for _, _, html in events]
 
-    if report.career_gaps:
-        lines.append("")
-        lines.append("**Périodes sans activité détectée :**")
-        for gap in report.career_gaps:
-            lines.append(f"  - ⚠️ {gap}")
+    for gap in report.career_gaps:
+        entries_html.append(
+            _timeline_entry_html("#f59e0b", "⚠️ Période sans activité détectée", gap)
+        )
 
-    return "\n".join(lines)
+    return "\n".join(header_lines) + "\n\n" + "".join(entries_html)
 
 
 def _format_profile_summary(parsed_cv, normalized_cv: NormalizedCV) -> str:
@@ -201,9 +442,6 @@ def _format_profile_summary(parsed_cv, normalized_cv: NormalizedCV) -> str:
     meta = []
     if location:
         meta.append(f"📍 {location}")
-    top_skills = (parsed_cv.skills_flat or [])[:6]
-    if top_skills:
-        meta.append("🛠 " + ", ".join(top_skills))
 
     lines = [f"### 👤 {header}"]
     if meta:
@@ -235,6 +473,7 @@ def on_cv_upload(cv_file, vision_calls):
         gr.update(value=""),                                  # job_title_input
         vision_calls,                                         # vision_calls_state
         None,                                                  # cv_embedding_state
+        "", "",                                               # metrics_html, skills_html
     )
 
     if cv_file is None:
@@ -255,6 +494,7 @@ def on_cv_upload(cv_file, vision_calls):
             gr.update(value=""),
             vision_calls,
             None,
+            "", "",
         )
 
     parsed_cv = _nlp_pipeline.parse_normalized(normalized_cv)
@@ -277,6 +517,8 @@ def on_cv_upload(cv_file, vision_calls):
         gr.update(value=parsed_cv.job_title or ""),
         vision_calls,
         cv_embedding,
+        _format_metrics_html(normalized_cv, quality_report),
+        _format_skill_badges(normalized_cv),
     )
 
 
@@ -289,6 +531,7 @@ def on_cv_clear():
         gr.update(value=""),
         0,
         None,
+        "", "",
     )
 
 
@@ -303,10 +546,13 @@ def _empty_job_slots() -> list:
 
 def _format_job_card(rank: int, match) -> str:
     job, result = match.job, match.scoring_result
+    score = result.overall_score
+    color = _score_color_hex(score)
+
     meta = [
         part
         for part in (
-            f"**{job.company}**" if job.company else None,
+            f"<strong>{job.company}</strong>" if job.company else None,
             f"📍 {job.location}" if job.location else None,
             job.contract_type,
         )
@@ -317,11 +563,16 @@ def _format_job_card(rank: int, match) -> str:
         hi = f"{int(job.salary_max):,}".replace(",", " ") if job.salary_max else "?"
         meta.append(f"💰 {lo} – {hi} €/an")
 
-    return f"""### {_score_color(result.overall_score)} #{rank} — {job.title} *({result.overall_score:.0f}/100)*
-{" · ".join(meta)}
-
-[Voir l'offre complète ↗]({job.url})
-"""
+    return (
+        '<div class="result-card" style="display:flex;gap:1rem;align-items:flex-start;margin-bottom:0.75rem">'
+        f'<div style="font-size:22px;font-weight:500;color:{color};min-width:48px">{score:.0f}</div>'
+        '<div style="flex:1">'
+        f'<div style="font-weight:600;margin-bottom:4px">#{rank} — {job.title}</div>'
+        f'<div style="font-size:13px;color:var(--app-text-secondary);margin-bottom:6px">{" · ".join(meta)}</div>'
+        f'<a href="{job.url}" target="_blank">Voir l\'offre complète ↗</a>'
+        "</div>"
+        "</div>"
+    )
 
 
 def _slot_updates(rank: int | None = None, match=None):
@@ -457,7 +708,8 @@ def _make_analyze_handler(index: int):
 
 with gr.Blocks(
     title="ATS CV Scorer",
-    theme=gr.themes.Soft(primary_hue="indigo", secondary_hue="blue"),
+    theme=THEME,
+    css=CUSTOM_CSS,
 ) as demo:
     gr.Markdown("# 📋 ATS CV Scorer")
 
@@ -480,9 +732,13 @@ with gr.Blocks(
             )
             with gr.Row():
                 with gr.Column(scale=1):
-                    cv_input = gr.File(label="CV (PDF)", file_types=[".pdf"])
+                    cv_input = gr.File(
+                        label="CV (PDF)", file_types=[".pdf"], elem_classes=["cv-upload"]
+                    )
                     profile_md = gr.Markdown()
+                    skills_html = gr.HTML()
                 with gr.Column(scale=2):
+                    metrics_html = gr.HTML()
                     quality_md = gr.Markdown()
                     timeline_md = gr.Markdown()
 
@@ -521,7 +777,10 @@ with gr.Blocks(
                 with gr.Group(visible=False) as group:
                     job_md = gr.Markdown()
                     slot_analyze_btn = gr.Button(
-                        "🔎 Analyser cette offre", size="sm", visible=False
+                        "🔎 Analyser cette offre",
+                        size="sm",
+                        visible=False,
+                        elem_classes=["analyze-outline"],
                     )
                     slot_feedback_md = gr.Markdown(visible=False)
                 job_slots.append((group, job_md, slot_analyze_btn, slot_feedback_md))
@@ -540,6 +799,8 @@ with gr.Blocks(
         job_title_input,
         vision_calls_state,
         cv_embedding_state,
+        metrics_html,
+        skills_html,
     ]
 
     cv_input.upload(

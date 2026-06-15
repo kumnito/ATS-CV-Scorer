@@ -77,17 +77,24 @@ THEME = gr.themes.Base(
     font_mono=[gr.themes.GoogleFont("JetBrains Mono")],
 )
 
-# Palette propre à l'app (indépendante des variables internes du thème Gradio,
-# pour un rendu stable quel que soit le thème de base).
+# Palette propre à l'app — basée sur les variables CSS natives du thème Gradio
+# (--body-text-color, --background-fill-*, --border-color-*), qui basculent
+# automatiquement entre light et dark mode. Aucune couleur de texte/fond n'est
+# hardcodée en hex, sauf les accents indigo (lisibles sur les deux fonds) et
+# les paires bg/texte des badges, qui ont un correctif .dark dédié.
 CUSTOM_CSS = """
 .gradio-container {
-    --app-bg-tint: #f8fafc;
-    --app-border: #e2e8f0;
-    --app-card-bg: #ffffff;
-    --app-text-secondary: #64748b;
+    --app-border: var(--border-color-primary);
+    --app-card-bg: var(--background-fill-primary);
+    --app-text-secondary: var(--body-text-color-subdued);
     --app-badge-bg: #eef2ff;
     --app-badge-text: #4338ca;
-    background: var(--app-bg-tint);
+    background: var(--background-fill-secondary);
+}
+
+.dark .gradio-container {
+    --app-badge-bg: #312e81;
+    --app-badge-text: #c7d2fe;
 }
 
 /* Cards résultats */
@@ -96,6 +103,7 @@ CUSTOM_CSS = """
     border-radius: 12px;
     padding: 1.25rem;
     background: var(--app-card-bg);
+    color: var(--body-text-color);
 }
 
 /* Grille de métriques (4 cards horizontales) */
@@ -120,6 +128,7 @@ CUSTOM_CSS = """
     font-size: 28px;
     font-weight: 600;
     line-height: 1.2;
+    color: var(--body-text-color);
 }
 .metric-sub {
     font-size: 12px;
@@ -130,7 +139,7 @@ CUSTOM_CSS = """
 /* Onglets — accent indigo sur l'onglet actif */
 .tab-nav button.selected, div[role="tablist"] button.selected {
     border-bottom: 2px solid #6366f1 !important;
-    color: #4338ca !important;
+    color: #6366f1 !important;
     font-weight: 600;
 }
 
@@ -142,7 +151,7 @@ CUSTOM_CSS = """
 }
 .analyze-outline:hover {
     border-color: #6366f1 !important;
-    color: #4338ca !important;
+    color: #6366f1 !important;
 }
 
 /* Zone d'upload du CV */
@@ -185,6 +194,7 @@ CUSTOM_CSS = """
     gap: 12px;
     padding: 10px 0;
     border-bottom: 0.5px solid var(--app-border);
+    color: var(--body-text-color);
 }
 .timeline-entry:last-child {
     border-bottom: none;
@@ -198,6 +208,7 @@ CUSTOM_CSS = """
 }
 .timeline-title {
     font-weight: 500;
+    color: var(--body-text-color);
 }
 .timeline-meta {
     font-size: 12px;
@@ -208,7 +219,7 @@ CUSTOM_CSS = """
     padding: 2px 8px;
     border-radius: 8px;
     background: var(--app-badge-bg);
-    color: var(--app-text-secondary);
+    color: var(--app-badge-text);
     align-self: center;
     white-space: nowrap;
 }

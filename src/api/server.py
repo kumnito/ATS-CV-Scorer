@@ -1,3 +1,4 @@
+import contextlib
 import os
 import tempfile
 import time
@@ -38,14 +39,14 @@ async def health():
     return {"status": "ok", "claude_budget_remaining": budget_guard.get_remaining()}
 
 
-# Kept for external API integration (ATS plugins, HR tools)
-# Not exposed in Gradio UI — available via REST only
-@app.post("/score", response_model=ATSResponse)
-async def score_cv(
-    cv_file: UploadFile = File(..., description="PDF résumé/CV"),
-    job_description: str = Form(..., description="Full job description text"),
-    include_feedback: bool = Form(False, description="Include Claude AI feedback"),
-):
+@contextlib.asynccontextmanager
+async def _tmp_pdf(cv_file: UploadFile):
+    """Valide le contenu reçu et l'écrit dans un fichier temporaire PDF.
+
+    Lève HTTPException(400) si le type MIME n'est pas application/pdf, ou
+    HTTPException(413) si la taille dépasse settings.max_pdf_size_mb.
+    Le fichier temporaire est supprimé à la sortie du bloc.
+    """
     if cv_file.content_type != "application/pdf":
         raise HTTPException(status_code=400, detail="Only PDF files are accepted.")
 
@@ -55,13 +56,27 @@ async def score_cv(
             status_code=413, detail=f"File exceeds {settings.max_pdf_size_mb} MB limit."
         )
 
-    start = time.perf_counter()
-
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
         tmp.write(content)
         tmp_path = tmp.name
 
     try:
+        yield tmp_path
+    finally:
+        os.unlink(tmp_path)
+
+
+# Kept for external API integration (ATS plugins, HR tools)
+# Not exposed in Gradio UI — available via REST only
+@app.post("/score", response_model=ATSResponse)
+async def score_cv(
+    cv_file: UploadFile = File(..., description="PDF résumé/CV"),
+    job_description: str = Form(..., description="Full job description text"),
+    include_feedback: bool = Form(False, description="Include Claude AI feedback"),
+):
+    start = time.perf_counter()
+
+    async with _tmp_pdf(cv_file) as tmp_path:
         normalized_cv = _cv_transformer.transform(tmp_path)
         if not normalized_cv.raw_text:
             raise HTTPException(status_code=422, detail="Could not extract text from PDF.")
@@ -83,8 +98,6 @@ async def score_cv(
             parsed_cv=parsed_cv,
             processing_time_seconds=round(time.perf_counter() - start, 3),
         )
-    finally:
-        os.unlink(tmp_path)
 
 
 @app.post("/find-jobs", response_model=list[RankedJobMatch])
@@ -94,20 +107,7 @@ async def find_jobs(
         20, description="Maximum number of job listings to fetch and score"
     ),
 ):
-    if cv_file.content_type != "application/pdf":
-        raise HTTPException(status_code=400, detail="Only PDF files are accepted.")
-
-    content = await cv_file.read()
-    if len(content) > settings.max_pdf_size_mb * 1024 * 1024:
-        raise HTTPException(
-            status_code=413, detail=f"File exceeds {settings.max_pdf_size_mb} MB limit."
-        )
-
-    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-        tmp.write(content)
-        tmp_path = tmp.name
-
-    try:
+    async with _tmp_pdf(cv_file) as tmp_path:
         normalized_cv = _cv_transformer.transform(tmp_path)
         if not normalized_cv.raw_text:
             raise HTTPException(status_code=422, detail="Could not extract text from PDF.")
@@ -117,5 +117,3 @@ async def find_jobs(
             parsed_cv, _job_search_service, _semantic_scorer, max_results=max_results
         )
         return result.matches
-    finally:
-        os.unlink(tmp_path)

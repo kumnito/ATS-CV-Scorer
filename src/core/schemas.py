@@ -165,6 +165,8 @@ class JobListing(BaseModel):
     salary_min: Optional[float] = None
     salary_max: Optional[float] = None
     contract_type: Optional[str] = None
+    source: str = "adzuna"
+    source_color: str = "#6366f1"
 
 
 class RankedJobMatch(BaseModel):

@@ -5,9 +5,10 @@ import time
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
+from src.core.budget_guard import budget_guard
 from src.core.config import settings
 from src.core.schemas import ATSResponse, RankedJobMatch
-from src.services.claude_feedback import ClaudeFeedback
+from src.services.claude_feedback import ClaudeBudgetExceeded, ClaudeFeedback
 from src.services.cv_transformer import CVTransformer
 from src.services.job_matcher import find_matching_jobs
 from src.services.job_search import JobSearchService
@@ -17,7 +18,7 @@ from src.services.semantic_scorer import SemanticScorer
 app = FastAPI(title="ATS CV Scorer API", version="0.2.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["https://voroman-ats-cv-scorer.hf.space"],
     allow_methods=["POST", "GET"],
     allow_headers=["*"],
 )
@@ -34,7 +35,7 @@ _job_search_service = JobSearchService(
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "claude_budget_remaining": budget_guard.get_remaining()}
 
 
 # Kept for external API integration (ATS plugins, HR tools)
@@ -70,9 +71,12 @@ async def score_cv(
 
         if include_feedback and settings.anthropic_api_key:
             feedback_svc = ClaudeFeedback()
-            scoring_result.feedback = feedback_svc.generate_feedback(
-                parsed_cv, job_description, scoring_result
-            )
+            try:
+                scoring_result.feedback = feedback_svc.generate_feedback(
+                    parsed_cv, job_description, scoring_result
+                )
+            except ClaudeBudgetExceeded as exc:
+                raise HTTPException(status_code=429, detail=str(exc)) from exc
 
         return ATSResponse(
             scoring_result=scoring_result,

@@ -1,10 +1,6 @@
-import json
-import os
-import threading
-from pathlib import Path
-
 import anthropic
 
+from src.core.budget_guard import budget_guard
 from src.core.config import settings
 from src.core.schemas import ParsedCV, ScoringResult
 
@@ -14,56 +10,9 @@ Focus on: skill alignment, experience relevance, missing ATS keywords, and struc
 Always respond in French, regardless of the language of the CV or job description.
 Be direct and specific. Format your response in markdown."""
 
-# Budget global (process-wide) d'appels Claude — protège la clé API limitée à
-# $10 sur la démo HF Spaces. ~300 appels feedback (~$0.025/appel) ≈ $7.50,
-# laissant une marge de sécurité pour les appels Vision LLM (cascade niveau 3).
-CLAUDE_CALLS_LIMIT = 300
-
-# Compteur persisté hors-process (survit aux rechargements de l'app dans le
-# même conteneur HF Spaces) et protégé par un verrou contre les accès
-# concurrents (UI Gradio + API FastAPI multithreads).
-QUOTA_FILE_PATH = Path(os.environ.get("CLAUDE_QUOTA_FILE", "/tmp/claude_quota.json"))
-_QUOTA_LOCK = threading.Lock()
-
-
-def _load_calls_count() -> int:
-    try:
-        return int(json.loads(QUOTA_FILE_PATH.read_text()).get("count", 0))
-    except (OSError, ValueError, json.JSONDecodeError):
-        return 0
-
-
-def _save_calls_count(count: int) -> None:
-    try:
-        QUOTA_FILE_PATH.write_text(json.dumps({"count": count}))
-    except OSError:
-        pass
-
-
-CLAUDE_CALLS_COUNT = _load_calls_count()
-
-
-def _reserve_call() -> bool:
-    """Atomically check the quota and reserve one call slot. Thread-safe."""
-    global CLAUDE_CALLS_COUNT
-    with _QUOTA_LOCK:
-        if CLAUDE_CALLS_COUNT >= CLAUDE_CALLS_LIMIT:
-            return False
-        CLAUDE_CALLS_COUNT += 1
-        _save_calls_count(CLAUDE_CALLS_COUNT)
-        return True
-
-
-def _release_call() -> None:
-    """Roll back a reservation when the underlying API call failed."""
-    global CLAUDE_CALLS_COUNT
-    with _QUOTA_LOCK:
-        CLAUDE_CALLS_COUNT = max(0, CLAUDE_CALLS_COUNT - 1)
-        _save_calls_count(CLAUDE_CALLS_COUNT)
-
 
 class ClaudeBudgetExceeded(Exception):
-    """Levée quand CLAUDE_CALLS_LIMIT a été atteint pour ce processus."""
+    """Levée quand le quota global de budget_guard a été atteint."""
 
 
 class ClaudeFeedback:
@@ -79,9 +28,9 @@ class ClaudeFeedback:
         job_description: str,
         scoring_result: ScoringResult,
     ) -> str:
-        if not _reserve_call():
+        if not budget_guard.check_and_increment():
             raise ClaudeBudgetExceeded(
-                f"Claude calls limit reached ({CLAUDE_CALLS_LIMIT})."
+                f"Claude calls limit reached ({budget_guard.limit})."
             )
 
         user_content = f"""## Job Description
@@ -127,6 +76,6 @@ Provide:
                 messages=[{"role": "user", "content": user_content}],
             )
         except Exception:
-            _release_call()
+            budget_guard.release()
             raise
         return response.content[0].text

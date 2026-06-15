@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Optional
 
+from src.core.budget_guard import budget_guard
+
 logger = logging.getLogger(__name__)
 
 import pdfplumber
@@ -257,6 +259,10 @@ class CVTransformer:
 
         # --- Niveau 3 : Vision LLM (comparaison par richesse structurelle) ---
         if settings.anthropic_api_key and settings.vision_llm_enabled and allow_vision:
+            if not budget_guard.check_and_increment():
+                logger.warning("cascade | niveau 3 ignoré : quota Claude global épuisé")
+                return best_cv
+
             logger.info("cascade | niveau 3 → Vision LLM déclenché (conf %.2f < %.2f)",
                         best_confidence, _CONFIDENCE_THRESHOLD)
             best_richness = _vision_richness_score(best_cv)
@@ -276,6 +282,7 @@ class CVTransformer:
                 if vision_richness > best_richness:
                     return vision_cv
             except Exception as exc:
+                budget_guard.release()
                 logger.warning("cascade | Vision LLM échoué : %s", exc)
         else:
             logger.info(

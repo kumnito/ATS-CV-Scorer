@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.core.budget_guard import BudgetGuard
 from src.core.schemas import NormalizedCV
 from src.services.cv_transformer import CVTransformer, extract_date_range
 
@@ -20,6 +21,14 @@ SINGLE_COLUMN_PDF = FIXTURES / "sample_cv_ml_engineer_junior.pdf"
 TWO_COLUMNS_PDF = FIXTURES / "CV_kumnito_two_columns.pdf"
 
 TWO_COL_MISSING = not TWO_COLUMNS_PDF.exists()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_budget_guard(tmp_path, monkeypatch):
+    """Isole le BudgetGuard partagé pour éviter de consommer le quota réel."""
+    guard = BudgetGuard(limit=300, path=tmp_path / "claude_quota.json")
+    monkeypatch.setattr("src.services.cv_transformer.budget_guard", guard)
+    yield guard
 
 
 @pytest.fixture(scope="module")

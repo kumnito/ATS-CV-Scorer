@@ -4,10 +4,12 @@
 import logging
 
 logging.basicConfig(level=logging.INFO, format="%(name)s | %(levelname)s | %(message)s")
+logger = logging.getLogger(__name__)
 
 import gradio as gr
 import gradio_client.utils as _gradio_client_utils
 
+from src.core.budget_guard import budget_guard
 from src.core.config import settings
 from src.core.schemas import CVQualityReport, NormalizedCV
 from src.services.claude_feedback import ClaudeBudgetExceeded, ClaudeFeedback
@@ -45,6 +47,9 @@ _job_search_service = JobSearchService(
     app_key=settings.adzuna_api_key,
     country=settings.adzuna_country,
 )
+
+logger.info("budget_guard | quota Claude global restant : %d/%d",
+            budget_guard.get_remaining(), budget_guard.limit)
 
 MAX_JOB_RESULTS = 10
 

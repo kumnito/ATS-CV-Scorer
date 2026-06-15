@@ -62,7 +62,7 @@ flowchart TD
 | AI feedback | Anthropic Claude API (responses in French, prompt caching) |
 | Job search | Adzuna API (`httpx`) |
 | API | FastAPI |
-| UI | Gradio (two tabs) |
+| UI | Gradio (two tabs, custom "Tech Dashboard" theme) |
 | Deployment | Hugging Face Spaces (Docker, Python 3.12) |
 
 ## How it works
@@ -123,6 +123,27 @@ Reuses the CV already parsed in Tab 1 (no re-processing).
 | Keyword match | 40 % |
 | Semantic similarity | 35 % |
 | CV structure completeness | 25 % |
+
+## UI — Tech Dashboard
+
+The Gradio interface uses a custom `gr.themes.Base` theme (indigo/slate,
+Inter + JetBrains Mono) and injected CSS for a data-dashboard look:
+
+- **Metric cards** — 4 horizontal cards (ATS readability, profile score,
+  keyword density, experience) plus an extraction-method badge (✅ native /
+  ⚠️ OCR / 🤖 Vision AI with confidence %), generated from `CVQualityReport`.
+- **HTML progress bars** — the profile-strength score is rendered as a
+  colored bar (green/amber/red by threshold) instead of ASCII blocks.
+- **Colored job scores** — each job listing shows its match score in large
+  type, colored green (≥70), amber (≥50) or red (<50).
+- **Skill badges** — detected skills are grouped by category (ML / MLOps /
+  Cloud / Data / …) and rendered as small pill badges instead of a flat list.
+- **Career timeline** — an HTML timeline with colored dots (green =
+  experience, indigo = education, amber = career gap) and duration badges.
+
+All colors/backgrounds use Gradio's native CSS variables
+(`--body-text-color`, `--background-fill-*`, `--border-color-*`), so the
+dashboard remains readable in both light and dark mode.
 
 ## API budget protections (demo deployment)
 

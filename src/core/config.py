@@ -21,5 +21,8 @@ class Settings(BaseSettings):
 
     jooble_api_key: str = ""
 
+    france_travail_client_id: str = ""
+    france_travail_client_secret: str = ""
+
 
 settings = Settings()

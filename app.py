@@ -12,7 +12,7 @@ import gradio_client.utils as _gradio_client_utils
 from src.core.budget_guard import budget_guard
 from src.core.config import settings
 from src.core.schemas import CVQualityReport, NormalizedCV
-from src.services.claude_feedback import ClaudeBudgetExceeded, ClaudeFeedback
+from src.services.claude_feedback import ClaudeBudgetExceeded, ClaudeFeedback, ClaudeServiceError
 from src.services.cv_quality_scorer import CVQualityScorer
 from src.services.cv_transformer import CVTransformer
 from src.services.job_matcher import FRANCE_REGIONS, find_matching_jobs
@@ -441,8 +441,11 @@ def _make_analyze_handler(index: int):
             )
         except ClaudeBudgetExceeded:
             feedback = "⚠️ Service IA temporairement indisponible — réessayez plus tard."
+        except ClaudeServiceError as exc:
+            feedback = f"⚠️ {exc}"
         except Exception as exc:
-            feedback = f"⚠️ Feedback Claude indisponible : {exc}"
+            logger.warning("analyze_one | erreur inattendue lors du feedback Claude : %s", exc)
+            feedback = "⚠️ Feedback Claude indisponible pour le moment — réessayez plus tard."
         yield gr.update(value=feedback, visible=True), feedback_calls
 
     return _analyze_one

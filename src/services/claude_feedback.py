@@ -1,8 +1,12 @@
+import logging
+
 import anthropic
 
 from src.core.budget_guard import budget_guard
 from src.core.config import settings
 from src.core.schemas import ParsedCV, ScoringResult
+
+logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = """You are an expert ATS (Applicant Tracking System) analyst and career coach.
 Evaluate CVs against job descriptions and provide concise, actionable feedback.
@@ -13,6 +17,14 @@ Be direct and specific. Format your response in markdown."""
 
 class ClaudeBudgetExceeded(Exception):
     """Levée quand le quota global de budget_guard a été atteint."""
+
+
+class ClaudeServiceError(Exception):
+    """Levée quand l'appel à l'API Claude échoue (rate limit, erreur serveur, réseau).
+
+    Le message porté par cette exception est destiné à l'utilisateur final
+    (français, non technique) ; le détail technique est loggé séparément.
+    """
 
 
 class ClaudeFeedback:
@@ -75,6 +87,24 @@ Provide:
                 ],
                 messages=[{"role": "user", "content": user_content}],
             )
+        except anthropic.RateLimitError as exc:
+            budget_guard.release()
+            logger.warning("claude_feedback | rate limit Claude : %s", exc)
+            raise ClaudeServiceError(
+                "Le service IA est temporairement surchargé. Réessayez dans quelques instants."
+            ) from exc
+        except anthropic.APIConnectionError as exc:
+            budget_guard.release()
+            logger.warning("claude_feedback | erreur de connexion Claude : %s", exc)
+            raise ClaudeServiceError(
+                "Impossible de contacter le service IA. Vérifiez votre connexion et réessayez."
+            ) from exc
+        except anthropic.APIStatusError as exc:
+            budget_guard.release()
+            logger.warning("claude_feedback | erreur API Claude (%s) : %s", exc.status_code, exc)
+            raise ClaudeServiceError(
+                "Le service IA a rencontré une erreur. Réessayez plus tard."
+            ) from exc
         except Exception:
             budget_guard.release()
             raise

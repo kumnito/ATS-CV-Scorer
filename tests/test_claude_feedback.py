@@ -1,11 +1,13 @@
 from unittest.mock import MagicMock, patch
 
+import anthropic
+import httpx
 import pytest
 
 from src.core.budget_guard import BudgetGuard
 from src.core.schemas import ParsedCV, ScoreBreakdown, ScoringResult
 from src.services import claude_feedback
-from src.services.claude_feedback import ClaudeBudgetExceeded, ClaudeFeedback
+from src.services.claude_feedback import ClaudeBudgetExceeded, ClaudeFeedback, ClaudeServiceError
 
 
 @pytest.fixture(autouse=True)
@@ -87,6 +89,65 @@ class TestClaudeFeedbackBudget:
 
         mock_client.messages.create.assert_not_called()
         assert _isolated_budget_guard.get_remaining() == 0
+
+    def test_generate_feedback_raises_service_error_on_rate_limit(self, _isolated_budget_guard):
+        request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        response = httpx.Response(429, request=request)
+        rate_limit_error = anthropic.RateLimitError("rate limited", response=response, body=None)
+
+        with patch(
+            "src.services.claude_feedback.anthropic.Anthropic"
+        ) as mock_anthropic:
+            mock_client = MagicMock()
+            mock_client.messages.create.side_effect = rate_limit_error
+            mock_anthropic.return_value = mock_client
+
+            cf = ClaudeFeedback(api_key="sk-test")
+            with pytest.raises(ClaudeServiceError, match="surchargé"):
+                cf.generate_feedback(
+                    _make_parsed_cv(), "Job description", _make_scoring_result()
+                )
+
+        assert _isolated_budget_guard.get_remaining() == _isolated_budget_guard.limit
+
+    def test_generate_feedback_raises_service_error_on_connection_error(self, _isolated_budget_guard):
+        request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        connection_error = anthropic.APIConnectionError(request=request)
+
+        with patch(
+            "src.services.claude_feedback.anthropic.Anthropic"
+        ) as mock_anthropic:
+            mock_client = MagicMock()
+            mock_client.messages.create.side_effect = connection_error
+            mock_anthropic.return_value = mock_client
+
+            cf = ClaudeFeedback(api_key="sk-test")
+            with pytest.raises(ClaudeServiceError, match="contacter"):
+                cf.generate_feedback(
+                    _make_parsed_cv(), "Job description", _make_scoring_result()
+                )
+
+        assert _isolated_budget_guard.get_remaining() == _isolated_budget_guard.limit
+
+    def test_generate_feedback_raises_service_error_on_api_status_error(self, _isolated_budget_guard):
+        request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        response = httpx.Response(500, request=request)
+        status_error = anthropic.APIStatusError("server error", response=response, body=None)
+
+        with patch(
+            "src.services.claude_feedback.anthropic.Anthropic"
+        ) as mock_anthropic:
+            mock_client = MagicMock()
+            mock_client.messages.create.side_effect = status_error
+            mock_anthropic.return_value = mock_client
+
+            cf = ClaudeFeedback(api_key="sk-test")
+            with pytest.raises(ClaudeServiceError, match="erreur"):
+                cf.generate_feedback(
+                    _make_parsed_cv(), "Job description", _make_scoring_result()
+                )
+
+        assert _isolated_budget_guard.get_remaining() == _isolated_budget_guard.limit
 
     def test_generate_feedback_rolls_back_counter_on_api_error(self, _isolated_budget_guard):
         with patch(

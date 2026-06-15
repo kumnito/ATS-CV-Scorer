@@ -3,9 +3,19 @@
 import sys
 from unittest.mock import MagicMock, patch
 
+import anthropic
+import httpx
 import pytest
 
-from src.services.vision_extractor import VisionExtractor
+from src.services.vision_extractor import VisionExtractionError, VisionExtractor
+
+
+def _mock_pdf2image() -> MagicMock:
+    mock_img = MagicMock()
+    mock_img.save = lambda buf, format: buf.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+    mock_pdf2image = MagicMock()
+    mock_pdf2image.convert_from_path.return_value = [mock_img]
+    return mock_pdf2image
 
 
 def test_vision_json_parsing():
@@ -75,6 +85,62 @@ def test_vision_extractor_uses_configured_timeout():
         extractor.extract("dummy.pdf")
 
     mock_anthropic.assert_called_once_with(api_key="sk-test-key", timeout=60)
+
+
+def test_vision_raises_extraction_error_on_rate_limit():
+    extractor = VisionExtractor()
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    response = httpx.Response(429, request=request)
+    rate_limit_error = anthropic.RateLimitError("rate limited", response=response, body=None)
+
+    mock_client = MagicMock()
+    mock_client.messages.create.side_effect = rate_limit_error
+
+    with patch("src.services.vision_extractor.settings") as mock_settings, \
+         patch.dict(sys.modules, {"pdf2image": _mock_pdf2image()}), \
+         patch("anthropic.Anthropic", return_value=mock_client):
+        mock_settings.anthropic_api_key = "sk-test-key"
+        mock_settings.claude_model = "claude-sonnet-4-6"
+        mock_settings.vision_timeout_seconds = 60
+        with pytest.raises(VisionExtractionError, match="surchargé"):
+            extractor.extract("dummy.pdf")
+
+
+def test_vision_raises_extraction_error_on_connection_error():
+    extractor = VisionExtractor()
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    connection_error = anthropic.APIConnectionError(request=request)
+
+    mock_client = MagicMock()
+    mock_client.messages.create.side_effect = connection_error
+
+    with patch("src.services.vision_extractor.settings") as mock_settings, \
+         patch.dict(sys.modules, {"pdf2image": _mock_pdf2image()}), \
+         patch("anthropic.Anthropic", return_value=mock_client):
+        mock_settings.anthropic_api_key = "sk-test-key"
+        mock_settings.claude_model = "claude-sonnet-4-6"
+        mock_settings.vision_timeout_seconds = 60
+        with pytest.raises(VisionExtractionError, match="contacter"):
+            extractor.extract("dummy.pdf")
+
+
+def test_vision_raises_extraction_error_on_api_status_error():
+    extractor = VisionExtractor()
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    response = httpx.Response(500, request=request)
+    status_error = anthropic.APIStatusError("server error", response=response, body=None)
+
+    mock_client = MagicMock()
+    mock_client.messages.create.side_effect = status_error
+
+    with patch("src.services.vision_extractor.settings") as mock_settings, \
+         patch.dict(sys.modules, {"pdf2image": _mock_pdf2image()}), \
+         patch("anthropic.Anthropic", return_value=mock_client):
+        mock_settings.anthropic_api_key = "sk-test-key"
+        mock_settings.claude_model = "claude-sonnet-4-6"
+        mock_settings.vision_timeout_seconds = 60
+        with pytest.raises(VisionExtractionError, match="erreur"):
+            extractor.extract("dummy.pdf")
 
 
 def test_vision_skipped_without_api_key():

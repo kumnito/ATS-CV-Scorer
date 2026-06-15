@@ -8,12 +8,23 @@ JSON, which is then validated into a NormalizedCV.
 import base64
 import io
 import json
+import logging
 import re
 
 import anthropic
 
 from src.core.config import settings
 from src.core.schemas import NormalizedCV
+
+logger = logging.getLogger(__name__)
+
+
+class VisionExtractionError(Exception):
+    """Levée quand l'appel Claude Vision échoue (rate limit, erreur serveur, réseau).
+
+    Le message porté par cette exception est destiné à l'utilisateur final
+    (français, non technique) ; le détail technique est loggé séparément.
+    """
 
 
 class VisionExtractor:
@@ -73,21 +84,37 @@ class VisionExtractor:
             "- languages : liste de strings simples (ex. [\"Français\", \"Anglais\"])."
         )
 
-        response = client.messages.create(
-            model=settings.claude_model,
-            max_tokens=4096,
-            system=system_prompt,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {"type": "base64", "media_type": "image/png", "data": img_b64},
-                    },
-                    {"type": "text", "text": user_prompt},
-                ],
-            }],
-        )
+        try:
+            response = client.messages.create(
+                model=settings.claude_model,
+                max_tokens=4096,
+                system=system_prompt,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {"type": "base64", "media_type": "image/png", "data": img_b64},
+                        },
+                        {"type": "text", "text": user_prompt},
+                    ],
+                }],
+            )
+        except anthropic.RateLimitError as exc:
+            logger.warning("vision_extractor | rate limit Claude : %s", exc)
+            raise VisionExtractionError(
+                "Le service IA Vision est temporairement surchargé."
+            ) from exc
+        except anthropic.APIConnectionError as exc:
+            logger.warning("vision_extractor | erreur de connexion Claude : %s", exc)
+            raise VisionExtractionError(
+                "Impossible de contacter le service IA Vision."
+            ) from exc
+        except anthropic.APIStatusError as exc:
+            logger.warning("vision_extractor | erreur API Claude (%s) : %s", exc.status_code, exc)
+            raise VisionExtractionError(
+                "Le service IA Vision a rencontré une erreur."
+            ) from exc
 
         raw_json = response.content[0].text
         # Strip markdown code fences if present

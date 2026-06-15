@@ -12,6 +12,7 @@ from datetime import date
 from typing import Optional
 
 from src.core.budget_guard import budget_guard
+from src.services.vision_extractor import VisionExtractor, build_raw_text, richness_score
 
 logger = logging.getLogger(__name__)
 
@@ -126,36 +127,6 @@ class _LayoutInfo:
 
 
 # ---------------------------------------------------------------------------
-# Vision LLM richness score
-# ---------------------------------------------------------------------------
-
-
-def _vision_richness_score(cv: "NormalizedCV") -> float:
-    """Score de richesse structurelle d'un NormalizedCV.
-
-    Utilisé pour comparer Vision LLM vs pdfplumber/OCR sans dépendre du
-    word_count brut (qui compte le texte décoratif pour pdfplumber et les
-    noms de clés JSON pour Vision LLM).
-    """
-    score = 0.0
-    score += len(cv.experience) * 10
-    score += len(cv.education) * 8
-    score += sum(len(v) for v in [
-        cv.skills.ml,
-        cv.skills.mlops,
-        cv.skills.cloud,
-        cv.skills.languages,
-        cv.skills.data,
-        cv.skills.other,
-    ]) * 2
-    score += len(cv.projects) * 10
-    score += 15 if cv.header.email else 0
-    score += 15 if cv.header.title else 0
-    score += 10 if cv.summary else 0
-    return score
-
-
-# ---------------------------------------------------------------------------
 # Public class
 # ---------------------------------------------------------------------------
 
@@ -167,6 +138,9 @@ class CVTransformer:
     font name) to detect layout and reconstruct correct reading order before
     parsing sections, header, skills, experience, education, and projects.
     """
+
+    def __init__(self, vision_extractor: Optional[VisionExtractor] = None) -> None:
+        self.vision_extractor = vision_extractor or VisionExtractor()
 
     # ------------------------------------------------------------------
     # Public entry point — cascade : pdfplumber → OCR → Vision LLM
@@ -265,18 +239,18 @@ class CVTransformer:
 
             logger.info("cascade | niveau 3 → Vision LLM déclenché (conf %.2f < %.2f)",
                         best_confidence, _CONFIDENCE_THRESHOLD)
-            best_richness = _vision_richness_score(best_cv)
+            best_richness = richness_score(best_cv)
             logger.info("cascade | %s richness: %.0f", best_cv.extraction_method, best_richness)
             try:
-                vision_cv = self._transform_from_vision(pdf_path)
+                vision_cv = self.vision_extractor.extract(pdf_path)
                 # Reconstruire raw_text et word_count depuis les champs structurés
-                enriched_raw = self._build_raw_text_from_normalized(vision_cv)
+                enriched_raw = build_raw_text(vision_cv)
                 vision_cv = vision_cv.model_copy(update={
                     "raw_text": enriched_raw,
                     "word_count": len(enriched_raw.split()),
                     "layout_detected": real_layout,
                 })
-                vision_richness = _vision_richness_score(vision_cv)
+                vision_richness = richness_score(vision_cv)
                 winner = "vision" if vision_richness > best_richness else best_cv.extraction_method
                 logger.info("cascade | vision richness: %.0f → retenu: %s", vision_richness, winner)
                 if vision_richness > best_richness:
@@ -291,54 +265,6 @@ class CVTransformer:
             )
 
         return best_cv
-
-    def _build_raw_text_from_normalized(self, cv: NormalizedCV) -> str:
-        """Reconstruire raw_text depuis tous les champs structurés d'un NormalizedCV.
-
-        Utilisé après Vision LLM pour obtenir un word_count fidèle au contenu
-        réel du CV plutôt qu'au texte JSON brut.
-        """
-        parts: list[str] = []
-
-        if cv.header.name:
-            parts.append(cv.header.name)
-        if cv.header.title:
-            parts.append(cv.header.title)
-        if cv.header.location:
-            parts.append(cv.header.location)
-
-        if cv.summary:
-            parts.append(cv.summary)
-
-        for category, skills in cv.skills.model_dump().items():
-            if isinstance(skills, list):
-                parts.extend(str(s) for s in skills if s)
-
-        for exp in cv.experience:
-            if exp.title:
-                parts.append(exp.title)
-            if exp.company:
-                parts.append(exp.company)
-            if exp.period:
-                parts.append(exp.period)
-            parts.extend(exp.bullets)
-
-        for edu in cv.education:
-            if edu.degree:
-                parts.append(edu.degree)
-            if edu.school:
-                parts.append(edu.school)
-            parts.extend(edu.skills)
-
-        for proj in cv.projects:
-            if proj.name:
-                parts.append(proj.name)
-            if proj.description:
-                parts.append(proj.description)
-            parts.extend(proj.stack)
-            parts.extend(proj.metrics)
-
-        return " ".join(p for p in parts if p and str(p).strip())
 
     # ------------------------------------------------------------------
     # Step 0 — Extraction quality assessment
@@ -386,152 +312,6 @@ class CVTransformer:
             )
             parts.append(page_text)
         return "\n\n".join(parts)
-
-    # ------------------------------------------------------------------
-    # Step 0c — Vision LLM extraction (Claude API)
-    # ------------------------------------------------------------------
-
-    def _transform_from_vision(self, pdf_path: str) -> NormalizedCV:
-        """Extraire le NormalizedCV via Claude Vision (image du PDF).
-
-        Nécessite ANTHROPIC_API_KEY dans .env.
-        Coût estimé : ~0.01 $ / CV (claude-sonnet-4-6, 1 image).
-        """
-        import base64
-        import io
-        import json
-
-        try:
-            from pdf2image import convert_from_path  # type: ignore[import]
-        except ImportError as exc:
-            raise RuntimeError("pdf2image requis pour le fallback Vision LLM") from exc
-
-
-        if not settings.anthropic_api_key:
-            raise RuntimeError("ANTHROPIC_API_KEY absent — Vision LLM désactivé")
-
-        images = convert_from_path(pdf_path, dpi=200, first_page=1, last_page=1)
-        if not images:
-            raise RuntimeError("Impossible de convertir le PDF en image")
-
-        buf = io.BytesIO()
-        images[0].save(buf, format="PNG")
-        img_b64 = base64.standard_b64encode(buf.getvalue()).decode()
-
-        import anthropic as _anthropic
-        client = _anthropic.Anthropic(api_key=settings.anthropic_api_key)
-
-        system_prompt = (
-            "Tu es un extracteur de CV expert. "
-            "Extrais TOUTES les informations visibles dans ce CV, même partielles. "
-            "Ne rien omettre. Retourne UNIQUEMENT un JSON valide, sans markdown."
-        )
-        user_prompt = (
-            "Extrais ce CV avec le maximum de détails et retourne un JSON avec ces clés exactes :\n"
-            '{"header": {"name": null, "title": null, "email": null, "phone": null, '
-            '"location": null, "postal_code": null, "github": null, "linkedin": null}, '
-            '"summary": null, '
-            '"skills": {"ml": [], "mlops": [], "cloud": [], "languages": [], '
-            '"data": [], "other": [], "commerce": []}, '
-            '"experience": [{"title": null, "company": null, "date_start": null, '
-            '"date_end": null, "is_current": false, "bullets": []}], '
-            '"education": [{"degree": "", "school": "", "date_start": null, '
-            '"date_end": null, "is_current": false}], '
-            '"projects": [], "languages": []}\n\n'
-            "Instructions importantes :\n"
-            "- skills : inclure TOUS les outils visibles, y compris ceux mentionnés "
-            "dans les sections formation/éducation (ex. XGBoost, FastAPI, Docker appris en formation "
-            "→ les mettre dans skills, pas seulement dans education).\n"
-            "- experience.bullets : retranscrire chaque point de manière complète.\n"
-            "- education : inclure TOUTES les formations, certifications et MOOCs visibles.\n"
-            "- projects : inclure les projets avec stack technique et métriques si présents.\n"
-            "- languages : liste de strings simples (ex. [\"Français\", \"Anglais\"])."
-        )
-
-        response = client.messages.create(
-            model=settings.claude_model,
-            max_tokens=4096,
-            system=system_prompt,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {"type": "base64", "media_type": "image/png", "data": img_b64},
-                    },
-                    {"type": "text", "text": user_prompt},
-                ],
-            }],
-        )
-
-        raw_json = response.content[0].text
-        # Strip markdown code fences if present
-        raw_json = re.sub(r"```(?:json)?\s*", "", raw_json).strip()
-        start, end = raw_json.find("{"), raw_json.rfind("}") + 1
-        if start == -1 or end == 0:
-            raise ValueError("Aucun JSON dans la réponse Vision LLM")
-
-        data = json.loads(raw_json[start:end])
-
-        # Reconstruct raw_text from all text fields for skill matching and word count comparison.
-        # All items are converted to str — Claude peut varier la structure de ses listes.
-        def _s(v: object) -> str:
-            return str(v) if v is not None else ""
-
-        def _strs(lst: object) -> list[str]:
-            if not isinstance(lst, list):
-                return []
-            return [_s(i) for i in lst if i is not None and str(i).strip()]
-
-        raw_parts: list[str] = []
-        hdr = data.get("header") or {}
-        raw_parts.extend(filter(None, [hdr.get("name"), hdr.get("title"),
-                                       hdr.get("location"), hdr.get("linkedin")]))
-        if data.get("summary"):
-            raw_parts.append(_s(data["summary"]))
-        for exp in data.get("experience", []):
-            if not isinstance(exp, dict):
-                continue
-            raw_parts.extend(filter(None, [exp.get("title"), exp.get("company")]))
-            raw_parts.extend(_strs(exp.get("bullets")))
-        for edu in data.get("education", []):
-            if not isinstance(edu, dict):
-                continue
-            raw_parts.extend(filter(None, [edu.get("degree"), edu.get("school")]))
-        for proj in data.get("projects", []):
-            if isinstance(proj, dict):
-                raw_parts.extend(filter(None, [proj.get("name"), proj.get("description")]))
-            elif isinstance(proj, str):
-                raw_parts.append(proj)
-        skills_data = data.get("skills") or {}
-        for skill_list in skills_data.values():
-            raw_parts.extend(_strs(skill_list))
-        raw_parts.extend(_strs(data.get("languages")))
-        data["raw_text"] = " ".join(s for s in raw_parts if isinstance(s, str) and s.strip())
-        data["layout_detected"] = "single_column"
-        data["word_count"] = len(data["raw_text"].split())
-        data["extraction_method"] = "vision_llm"
-        data["extraction_confidence"] = 0.95
-
-        # Normaliser les champs liste[str] — Claude peut retourner des dicts à la place
-        def _flatten_str_list(lst: object) -> list[str]:
-            if not isinstance(lst, list):
-                return []
-            result = []
-            for item in lst:
-                if isinstance(item, str):
-                    result.append(item)
-                elif isinstance(item, dict):
-                    # Prendre la première valeur de type str trouvée
-                    for v in item.values():
-                        if isinstance(v, str) and v.strip():
-                            result.append(v)
-                            break
-            return result
-
-        data["languages"] = _flatten_str_list(data.get("languages"))
-
-        return NormalizedCV.model_validate(data)
 
     # ------------------------------------------------------------------
     # Core pipeline — pdfplumber words → NormalizedCV

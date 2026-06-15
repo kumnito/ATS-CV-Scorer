@@ -37,6 +37,7 @@ class JoobleProvider(JobProvider):
         query: str,
         location: Optional[str] = None,
         max_results: int = 20,
+        distance: Optional[int] = None,
     ) -> list[JobListing]:
         if not self.api_key:
             logger.warning("Jooble API key missing — skipping job search.")
@@ -47,6 +48,8 @@ class JoobleProvider(JobProvider):
         payload: dict = {"keywords": query}
         if location:
             payload["location"] = location
+            if distance is not None:
+                payload["radius"] = distance
 
         url = f"{_BASE_URL}{self.api_key}"
 

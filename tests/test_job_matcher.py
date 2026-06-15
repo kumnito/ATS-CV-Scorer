@@ -28,7 +28,7 @@ class _FakeJobSearch:
         self.by_location = by_location
         self.calls: list[tuple[str, str | None, int | None]] = []
 
-    def search(self, query, location=None, distance=None, max_results=20):
+    def search(self, query, location=None, distance=None, max_results=20, active_providers=None):
         self.calls.append((query, location, distance))
         return self.by_location.get(location, [])
 
@@ -310,3 +310,40 @@ def test_find_matching_jobs_adds_sector_query_when_sector_detected():
     job_search = _FakeJobSearch({"Croix": [_job()]})
     result = find_matching_jobs(cv, job_search, _FakeScorer())
     assert any("mode" in q for q in result.queries_used)
+
+
+# ── active_providers / source_counts / duplicates_removed ──────────────────
+
+def test_find_matching_jobs_passes_active_providers_to_job_search():
+    job_search = _FakeJobSearch({"Croix": [_job()]})
+
+    find_matching_jobs(_parsed_cv(), job_search, _FakeScorer(), active_providers=["adzuna", "jooble"])
+
+    assert job_search.calls
+
+
+def test_find_matching_jobs_computes_source_counts():
+    jobs = [
+        _job(title="ML Engineer", url="https://example.com/1"),
+        _job(title="Data Scientist", url="https://example.com/2"),
+    ]
+    jobs[0].source = "adzuna"
+    jobs[1].source = "jooble"
+    job_search = _FakeJobSearch({"Croix": jobs})
+
+    result = find_matching_jobs(_parsed_cv(), job_search, _FakeScorer())
+
+    assert result.source_counts.get("adzuna") == 1
+    assert result.source_counts.get("jooble") == 1
+
+
+def test_find_matching_jobs_computes_duplicates_removed():
+    # Same job repeated across the multi-query results -> deduplicated, counted.
+    shared_url = "https://example.com/job/shared"
+    job = _job(url=shared_url)
+    cv = _parsed_cv(job_title="Vendeur", sector="magasin")
+    job_search = _FakeJobSearch({"Croix": [job]})
+
+    result = find_matching_jobs(cv, job_search, _FakeScorer())
+
+    assert result.duplicates_removed >= 1

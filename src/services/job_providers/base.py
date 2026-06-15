@@ -21,5 +21,6 @@ class JobProvider(ABC):
         query: str,
         location: Optional[str] = None,
         max_results: int = 20,
+        distance: Optional[int] = None,
     ) -> list[JobListing]:
         ...

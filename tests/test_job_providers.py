@@ -157,7 +157,9 @@ class _FakeProvider:
     def check_availability(self) -> tuple[bool, float]:
         return self._available
 
-    def search(self, query: str, location: str | None = None, max_results: int = 20) -> list[JobListing]:
+    def search(
+        self, query: str, location: str | None = None, max_results: int = 20, distance: int | None = None
+    ) -> list[JobListing]:
         return self._listings
 
 
@@ -210,7 +212,7 @@ def test_orchestrator_search_skips_inactive_providers():
 
 def test_orchestrator_search_handles_provider_failure_gracefully():
     class _BrokenProvider(_FakeProvider):
-        def search(self, query, location=None, max_results=20):
+        def search(self, query, location=None, max_results=20, distance=None):
             raise RuntimeError("boom")
 
     providers = [
@@ -430,3 +432,16 @@ def test_extract_department_code_returns_none_without_location():
 def test_france_travail_parse_salary_min_extracts_first_number():
     assert _ft_parse_salary_min("Mensuel de 2200.0 Euros à 2500.0 Euros") == 2200.0
     assert _ft_parse_salary_min("") is None
+
+
+def test_orchestrator_search_defaults_to_all_providers_when_active_providers_not_given():
+    providers = [
+        _FakeProvider("alpha", [_listing("https://example.com/job/1", "alpha")]),
+        _FakeProvider("beta", [_listing("https://example.com/job/2", "beta")]),
+    ]
+    orchestrator = JobSearchOrchestrator(providers)
+
+    results = orchestrator.search(query="ML Engineer", location="Paris")
+
+    urls = {r.url for r in results}
+    assert urls == {"https://example.com/job/1", "https://example.com/job/2"}

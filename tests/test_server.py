@@ -9,7 +9,7 @@ from src.core.schemas import JobListing
 FIXTURE_PDF = Path(__file__).parent / "fixtures" / "sample_cv_ml_engineer_junior.pdf"
 
 
-def _fake_search(query, location=None, distance=None, max_results=20):
+def _fake_search(query, location=None, distance=None, max_results=20, active_providers=None):
     return [
         JobListing(
             title="ML Engineer",

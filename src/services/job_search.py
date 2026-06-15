@@ -32,6 +32,7 @@ class JobSearchService:
         location: Optional[str] = None,
         distance: Optional[int] = None,
         max_results: int = 20,
+        active_providers: Optional[list[str]] = None,
     ) -> list[JobListing]:
         return self._provider.search(
             query=query, location=location, distance=distance, max_results=max_results

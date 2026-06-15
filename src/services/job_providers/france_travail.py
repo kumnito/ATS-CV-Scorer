@@ -60,6 +60,7 @@ class FranceTravailProvider(JobProvider):
         query: str,
         location: Optional[str] = None,
         max_results: int = 20,
+        distance: Optional[int] = None,
     ) -> list[JobListing]:
         if not self.client_id or not self.client_secret:
             logger.warning("France Travail credentials missing — skipping job search.")
@@ -74,7 +75,7 @@ class FranceTravailProvider(JobProvider):
 
         params: dict = {
             "motsCles": query,
-            "rayon": _SEARCH_RADIUS_KM,
+            "rayon": distance if distance is not None else _SEARCH_RADIUS_KM,
             "range": _SEARCH_RANGE,
         }
         department = _extract_department_code(location)

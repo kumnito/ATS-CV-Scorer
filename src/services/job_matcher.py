@@ -1,5 +1,6 @@
 import re
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, field
 from typing import Optional
 
 import numpy as np
@@ -57,6 +58,8 @@ class JobSearchResult:
     queries_used: list[str]
     location_used: Optional[str]
     few_results: bool = False
+    source_counts: dict[str, int] = field(default_factory=dict)
+    duplicates_removed: int = 0
 
 
 def _trim_title_for_query(title: str) -> str:
@@ -125,6 +128,7 @@ def find_matching_jobs(
     max_results: int = 20,
     region: str | None = None,
     cv_embedding: Optional[np.ndarray] = None,
+    active_providers: Optional[list[str]] = None,
 ) -> JobSearchResult:
     queries = _build_queries(parsed_cv)
     if not queries:
@@ -156,17 +160,21 @@ def find_matching_jobs(
     seen_urls: set[str] = set()
     all_listings = []
 
+    total_listings_seen = 0
     for query in queries:
         listings = job_search.search(
             query=query,
             location=location_used,
             distance=distance,
             max_results=results_per_query,
+            active_providers=active_providers,
         )
+        total_listings_seen += len(listings)
         for listing in listings:
             if listing.url not in seen_urls:
                 seen_urls.add(listing.url)
                 all_listings.append(listing)
+    duplicates_removed = total_listings_seen - len(all_listings)
 
     # Score all unique listings in a single batch encoding pass
     if cv_embedding is None:
@@ -184,9 +192,14 @@ def find_matching_jobs(
     filtered = [m for m in scored if m.scoring_result.overall_score >= _MIN_SCORE_THRESHOLD]
     few_results = bool(scored) and len(filtered) < _FEW_RESULTS_THRESHOLD
 
+    final_matches = filtered if filtered else scored
+    source_counts = dict(Counter(m.job.source for m in final_matches))
+
     return JobSearchResult(
-        matches=filtered if filtered else scored,
+        matches=final_matches,
         queries_used=queries,
         location_used=location_used,
         few_results=few_results,
+        source_counts=source_counts,
+        duplicates_removed=duplicates_removed,
     )

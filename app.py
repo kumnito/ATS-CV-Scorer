@@ -16,7 +16,10 @@ from src.services.claude_feedback import ClaudeBudgetExceeded, ClaudeFeedback, C
 from src.services.cv_quality_scorer import CVQualityScorer
 from src.services.cv_transformer import CVTransformer
 from src.services.job_matcher import FRANCE_REGIONS, find_matching_jobs
-from src.services.job_search import JobSearchService
+from src.services.job_providers.adzuna import AdzunaProvider
+from src.services.job_providers.france_travail import FranceTravailProvider
+from src.services.job_providers.jooble import JoobleProvider
+from src.services.job_providers.orchestrator import JobSearchOrchestrator
 from src.services.nlp_pipeline import NLPPipeline
 from src.services.semantic_scorer import SemanticScorer
 
@@ -44,11 +47,40 @@ _cv_transformer = CVTransformer()
 _nlp_pipeline = NLPPipeline()
 _semantic_scorer = SemanticScorer()
 _cv_quality_scorer = CVQualityScorer()
-_job_search_service = JobSearchService(
-    app_id=settings.adzuna_id,
-    app_key=settings.adzuna_api_key,
-    country=settings.adzuna_country,
-)
+_providers = [
+    AdzunaProvider(
+        app_id=settings.adzuna_id,
+        app_key=settings.adzuna_api_key,
+        country=settings.adzuna_country,
+    ),
+    JoobleProvider(
+        api_key=settings.jooble_api_key,
+        country=settings.adzuna_country,
+    ),
+    FranceTravailProvider(
+        client_id=settings.france_travail_client_id,
+        client_secret=settings.france_travail_client_secret,
+    ),
+]
+_orchestrator = JobSearchOrchestrator(providers=_providers)
+
+# Display label + tagline per source, used for the source cards and the
+# "Sources actives" toggle in the "Recherche d'offres" tab.
+_PROVIDER_LABELS: dict[str, tuple[str, str]] = {
+    "adzuna": ("Adzuna", "FR natif"),
+    "jooble": ("Jooble", "International"),
+    "france_travail": ("France Travail", "Officiel FR"),
+}
+
+
+def _default_active_providers() -> list[str]:
+    """Sources enabled by default: Adzuna always, others only if configured."""
+    active = ["adzuna"]
+    if settings.jooble_api_key:
+        active.append("jooble")
+    if settings.france_travail_client_id and settings.france_travail_client_secret:
+        active.append("france_travail")
+    return active
 
 logger.info("budget_guard | quota Claude global restant : %d/%d",
             budget_guard.get_remaining(), budget_guard.limit)
@@ -187,6 +219,18 @@ CUSTOM_CSS = """
     border-radius: 8px;
     margin-bottom: 0.75rem;
 }
+.source-pill {
+    display: inline-flex;
+    align-items: center;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 6px;
+    margin-left: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    vertical-align: middle;
+}
 
 /* Timeline carrière */
 .timeline-entry {
@@ -259,6 +303,52 @@ def _metric_card(label: str, value: str, sub: str) -> str:
         f'<div class="metric-sub">{sub}</div>'
         "</div>"
     )
+
+
+def _source_card_html(provider_name: str, status: tuple[bool, float] | None) -> str:
+    label, sub = _PROVIDER_LABELS[provider_name]
+    if status is None:
+        icon, color, text = "⏳", "#f59e0b", "Vérification…"
+    else:
+        available, latency_ms = status
+        if available:
+            icon, color, text = "✅", "#22c55e", f"Disponible · {latency_ms:.0f} ms"
+        else:
+            icon, color, text = "❌", "#ef4444", "Indisponible"
+    return (
+        '<div class="metric-card">'
+        f'<div class="metric-label">{label}</div>'
+        f'<div class="metric-value" style="font-size:15px;color:{color}">{icon} {text}</div>'
+        f'<div class="metric-sub">{sub}</div>'
+        "</div>"
+    )
+
+
+def _format_sources_html(status_map: dict[str, tuple[bool, float]] | None) -> str:
+    status_map = status_map or {}
+    cards = "".join(_source_card_html(name, status_map.get(name)) for name in _PROVIDER_LABELS)
+    return f'<div class="metrics-grid">{cards}</div>'
+
+
+def on_load_check_providers():
+    status_map = _orchestrator.check_all_availability()
+    return _format_sources_html(status_map), status_map
+
+
+def _format_source_stats(result) -> str:
+    if not result.matches:
+        return ""
+    parts = []
+    for name, (label, _) in _PROVIDER_LABELS.items():
+        n = result.source_counts.get(name, 0)
+        if n:
+            parts.append(f"{label} ({n})")
+    if not parts:
+        return ""
+    line = " · ".join(parts)
+    if result.duplicates_removed:
+        line += f" · doublons retirés ({result.duplicates_removed})"
+    return f"📊 {line}"
 
 
 def _extraction_badge_html(report: CVQualityReport) -> str:
@@ -555,6 +645,14 @@ def _empty_job_slots() -> list:
     return result
 
 
+def _source_pill_html(job) -> str:
+    label = _PROVIDER_LABELS.get(job.source, (job.source, ""))[0]
+    return (
+        f'<span class="source-pill" style="background:{job.source_color}1a;'
+        f'color:{job.source_color}">{label}</span>'
+    )
+
+
 def _format_job_card(rank: int, match) -> str:
     job, result = match.job, match.scoring_result
     score = result.overall_score
@@ -578,7 +676,7 @@ def _format_job_card(rank: int, match) -> str:
         '<div class="result-card" style="display:flex;gap:1rem;align-items:flex-start;margin-bottom:0.75rem">'
         f'<div style="font-size:22px;font-weight:500;color:{color};min-width:48px">{score:.0f}</div>'
         '<div style="flex:1">'
-        f'<div style="font-weight:600;margin-bottom:4px">#{rank} — {job.title}</div>'
+        f'<div style="font-weight:600;margin-bottom:4px">#{rank} — {job.title}{_source_pill_html(job)}</div>'
         f'<div style="font-size:13px;color:var(--app-text-secondary);margin-bottom:6px">{" · ".join(meta)}</div>'
         f'<a href="{job.url}" target="_blank">Voir l\'offre complète ↗</a>'
         "</div>"
@@ -602,10 +700,39 @@ def _slot_updates(rank: int | None = None, match=None):
     ]
 
 
-def on_search(parsed_cv, region, title_override, cv_embedding):
+_SOURCE_FILTER_ALL = "Toutes sources"
+
+
+def _source_filter_choices() -> list[str]:
+    return [_SOURCE_FILTER_ALL] + [label for label, _ in _PROVIDER_LABELS.values()]
+
+
+_PROVIDER_NAME_BY_LABEL = {label: key for key, (label, _) in _PROVIDER_LABELS.items()}
+
+
+def _render_job_slots(matches, source_filter, salary_only):
+    filtered = matches or []
+    if source_filter and source_filter != _SOURCE_FILTER_ALL:
+        provider_name = _PROVIDER_NAME_BY_LABEL.get(source_filter)
+        filtered = [m for m in filtered if m.job.source == provider_name]
+    if salary_only:
+        filtered = [m for m in filtered if m.job.salary_min or m.job.salary_max]
+
+    outputs = []
+    for i in range(MAX_JOB_RESULTS):
+        outputs += _slot_updates(rank=i + 1, match=filtered[i]) if i < len(filtered) else _slot_updates()
+    return outputs
+
+
+def on_filter_change(matches, source_filter, salary_only):
+    return _render_job_slots(matches, source_filter, salary_only)
+
+
+def on_search(parsed_cv, region, title_override, cv_embedding, active_providers):
     if parsed_cv is None:
         status = "⚠️ Uploadez d'abord votre CV en onglet 1."
-        return [status, [], ""] + _empty_job_slots()
+        outputs = [status, [], "", "", gr.update(value=_SOURCE_FILTER_ALL), gr.update(value=False)]
+        return outputs + _empty_job_slots()
 
     # Apply user's title override before searching
     if title_override and title_override.strip():
@@ -613,11 +740,12 @@ def on_search(parsed_cv, region, title_override, cv_embedding):
 
     result = find_matching_jobs(
         parsed_cv,
-        _job_search_service,
+        _orchestrator,
         _semantic_scorer,
         cv_embedding=cv_embedding,
         max_results=MAX_JOB_RESULTS,
         region=region or None,
+        active_providers=active_providers,
     )
     matches = result.matches
 
@@ -625,7 +753,7 @@ def on_search(parsed_cv, region, title_override, cv_embedding):
     query_display = ""
     if result.queries_used:
         main_q = result.queries_used[0]
-        query_display = f'🔍 Requête Adzuna : **"{main_q}"**'
+        query_display = f'🔍 Requête : **"{main_q}"**'
         if len(result.queries_used) > 1:
             extras = ", ".join(f'"{q}"' for q in result.queries_used[1:])
             query_display += f" · variantes : {extras}"
@@ -665,7 +793,16 @@ def on_search(parsed_cv, region, title_override, cv_embedding):
             "vos **compétences clés** et votre **ville**, ou réessayez un peu plus tard."
         )
 
-    outputs = [status, matches, query_display]
+    source_stats = _format_source_stats(result)
+
+    outputs = [
+        status,
+        matches,
+        query_display,
+        source_stats,
+        gr.update(value=_SOURCE_FILTER_ALL),
+        gr.update(value=False),
+    ]
     for i in range(MAX_JOB_RESULTS):
         outputs += _slot_updates(rank=i + 1, match=matches[i]) if i < len(matches) else _slot_updates()
     return outputs
@@ -731,6 +868,7 @@ with gr.Blocks(
     vision_calls_state = gr.State(0)
     feedback_calls_state = gr.State(0)
     cv_embedding_state = gr.State(None)
+    provider_status_state = gr.State({})
 
     with gr.Tabs():
 
@@ -761,6 +899,14 @@ with gr.Blocks(
                 "**feedback Claude personnalisé** pour chaque offre à la demande — "
                 "aucun appel IA n'est déclenché tant que vous ne cliquez pas sur « Analyser »."
             )
+            sources_html = gr.HTML()
+            active_providers_checkbox = gr.CheckboxGroup(
+                choices=[(f"{label} ({sub})", key) for key, (label, sub) in _PROVIDER_LABELS.items()],
+                value=_default_active_providers(),
+                label="Sources actives",
+            )
+            gr.Markdown("🔒 Clés API gérées par le service · aucune configuration requise")
+
             cv_context_md = gr.Markdown("⚠️ Uploadez votre CV en onglet 1 pour commencer.")
             with gr.Row():
                 job_title_input = gr.Textbox(
@@ -782,6 +928,16 @@ with gr.Blocks(
                 )
             search_query_md = gr.Markdown()
             search_status_md = gr.Markdown()
+            source_stats_md = gr.Markdown()
+
+            with gr.Row():
+                source_filter_dropdown = gr.Dropdown(
+                    choices=_source_filter_choices(),
+                    value=_SOURCE_FILTER_ALL,
+                    label="Filtrer par source",
+                    scale=2,
+                )
+                salary_filter_checkbox = gr.Checkbox(label="Salaire connu uniquement", value=False, scale=1)
 
             job_slots = []
             for _ in range(MAX_JOB_RESULTS):
@@ -819,15 +975,39 @@ with gr.Blocks(
     )
     cv_input.clear(fn=on_cv_clear, outputs=_upload_outputs)
 
-    _search_outputs = [search_status_md, matches_state, search_query_md]
+    _search_outputs = [
+        search_status_md,
+        matches_state,
+        search_query_md,
+        source_stats_md,
+        source_filter_dropdown,
+        salary_filter_checkbox,
+    ]
     for group, job_md, slot_analyze_btn, slot_feedback_md in job_slots:
         _search_outputs += [group, job_md, slot_analyze_btn, slot_feedback_md]
 
     search_btn.click(
         fn=on_search,
-        inputs=[parsed_cv_state, region_dropdown, job_title_input, cv_embedding_state],
+        inputs=[
+            parsed_cv_state,
+            region_dropdown,
+            job_title_input,
+            cv_embedding_state,
+            active_providers_checkbox,
+        ],
         outputs=_search_outputs,
     )
+
+    _filter_outputs = []
+    for group, job_md, slot_analyze_btn, slot_feedback_md in job_slots:
+        _filter_outputs += [group, job_md, slot_analyze_btn, slot_feedback_md]
+
+    for filter_component in (source_filter_dropdown, salary_filter_checkbox):
+        filter_component.change(
+            fn=on_filter_change,
+            inputs=[matches_state, source_filter_dropdown, salary_filter_checkbox],
+            outputs=_filter_outputs,
+        )
 
     for idx, (_, _, slot_analyze_btn, slot_feedback_md) in enumerate(job_slots):
         slot_analyze_btn.click(
@@ -835,6 +1015,11 @@ with gr.Blocks(
             inputs=[parsed_cv_state, matches_state, feedback_calls_state],
             outputs=[slot_feedback_md, feedback_calls_state],
         )
+
+    demo.load(
+        fn=on_load_check_providers,
+        outputs=[sources_html, provider_status_state],
+    )
 
 if __name__ == "__main__":
     demo.launch(server_name="0.0.0.0", server_port=7860)

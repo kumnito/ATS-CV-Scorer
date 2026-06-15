@@ -34,10 +34,14 @@ class JobSearchOrchestrator:
     def search(
         self,
         query: str,
-        location: str | None,
-        active_providers: list[str],
+        location: str | None = None,
+        active_providers: list[str] | None = None,
         max_results: int = 20,
+        distance: int | None = None,
     ) -> list[JobListing]:
+        if active_providers is None:
+            active_providers = [provider.name for provider in self.providers]
+
         seen_urls: set[str] = set()
         all_listings: list[JobListing] = []
 
@@ -45,7 +49,9 @@ class JobSearchOrchestrator:
             if provider.name not in active_providers:
                 continue
             try:
-                listings = provider.search(query=query, location=location, max_results=max_results)
+                listings = provider.search(
+                    query=query, location=location, max_results=max_results, distance=distance
+                )
             except Exception as exc:  # noqa: BLE001 — one provider's failure must not break the rest
                 logger.warning("Provider %s search failed: %s", provider.name, exc)
                 continue

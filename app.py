@@ -232,6 +232,7 @@ def on_cv_upload(cv_file, vision_calls):
         gr.update(interactive=False),                         # search_btn
         gr.update(value=""),                                  # job_title_input
         vision_calls,                                         # vision_calls_state
+        None,                                                  # cv_embedding_state
     )
 
     if cv_file is None:
@@ -251,10 +252,12 @@ def on_cv_upload(cv_file, vision_calls):
             gr.update(interactive=False),
             gr.update(value=""),
             vision_calls,
+            None,
         )
 
     parsed_cv = _nlp_pipeline.parse_normalized(normalized_cv)
     quality_report = _cv_quality_scorer.score(normalized_cv)
+    cv_embedding = _semantic_scorer.encode_cv(normalized_cv.raw_text)
 
     quality_md = _format_quality_report(normalized_cv, quality_report)
     if not allow_vision and normalized_cv.extraction_confidence < 0.85:
@@ -271,6 +274,7 @@ def on_cv_upload(cv_file, vision_calls):
         gr.update(interactive=True),
         gr.update(value=parsed_cv.job_title or ""),
         vision_calls,
+        cv_embedding,
     )
 
 
@@ -282,6 +286,7 @@ def on_cv_clear():
         gr.update(interactive=False),
         gr.update(value=""),
         0,
+        None,
     )
 
 
@@ -333,7 +338,7 @@ def _slot_updates(rank: int | None = None, match=None):
     ]
 
 
-def on_search(parsed_cv, region, title_override):
+def on_search(parsed_cv, region, title_override, cv_embedding):
     if parsed_cv is None:
         status = "⚠️ Uploadez d'abord votre CV en onglet 1."
         return [status, [], ""] + _empty_job_slots()
@@ -346,6 +351,7 @@ def on_search(parsed_cv, region, title_override):
         parsed_cv,
         _job_search_service,
         _semantic_scorer,
+        cv_embedding=cv_embedding,
         max_results=MAX_JOB_RESULTS,
         region=region or None,
     )
@@ -456,6 +462,7 @@ with gr.Blocks(
     matches_state = gr.State([])
     vision_calls_state = gr.State(0)
     feedback_calls_state = gr.State(0)
+    cv_embedding_state = gr.State(None)
 
     with gr.Tabs():
 
@@ -527,6 +534,7 @@ with gr.Blocks(
         search_btn,
         job_title_input,
         vision_calls_state,
+        cv_embedding_state,
     ]
 
     cv_input.upload(
@@ -540,7 +548,7 @@ with gr.Blocks(
 
     search_btn.click(
         fn=on_search,
-        inputs=[parsed_cv_state, region_dropdown, job_title_input],
+        inputs=[parsed_cv_state, region_dropdown, job_title_input, cv_embedding_state],
         outputs=_search_outputs,
     )
 

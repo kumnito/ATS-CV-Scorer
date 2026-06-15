@@ -34,14 +34,26 @@ class _FakeJobSearch:
 
 
 class _FakeScorer:
-    def score(self, parsed_cv, description):
+    def encode_cv(self, cv_text):
+        return None
+
+    def score(self, parsed_cv, description, cv_embedding=None):
         score = 90.0 if "build" in description.lower() else 30.0
         return ScoringResult(overall_score=score, breakdown=_BREAKDOWN)
 
+    def score_many(self, parsed_cv, descriptions, cv_embedding=None):
+        return [self.score(parsed_cv, d) for d in descriptions]
+
 
 class _LowScorer:
-    def score(self, parsed_cv, description):
+    def encode_cv(self, cv_text):
+        return None
+
+    def score(self, parsed_cv, description, cv_embedding=None):
         return ScoringResult(overall_score=10.0, breakdown=_BREAKDOWN)
+
+    def score_many(self, parsed_cv, descriptions, cv_embedding=None):
+        return [self.score(parsed_cv, d) for d in descriptions]
 
 
 def _parsed_cv(job_title="ML Engineer", location="Croix", postal_code=None, sector=None) -> ParsedCV:

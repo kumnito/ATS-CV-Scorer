@@ -2,6 +2,8 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
+import numpy as np
+
 from src.core.lexicons import JOB_TITLE_RE, JOB_TITLE_SYNONYMS
 from src.core.schemas import ParsedCV, RankedJobMatch
 from src.services.job_search import JobSearchService
@@ -122,6 +124,7 @@ def find_matching_jobs(
     scorer: SemanticScorer,
     max_results: int = 20,
     region: str | None = None,
+    cv_embedding: Optional[np.ndarray] = None,
 ) -> JobSearchResult:
     queries = _build_queries(parsed_cv)
     if not queries:
@@ -165,10 +168,15 @@ def find_matching_jobs(
                 seen_urls.add(listing.url)
                 all_listings.append(listing)
 
-    # Score all unique listings and sort by relevance
+    # Score all unique listings in a single batch encoding pass
+    if cv_embedding is None:
+        cv_embedding = scorer.encode_cv(parsed_cv.raw_text)
+    scoring_results = scorer.score_many(
+        parsed_cv, [listing.description for listing in all_listings], cv_embedding=cv_embedding
+    )
     scored = [
-        RankedJobMatch(job=l, scoring_result=scorer.score(parsed_cv, l.description))
-        for l in all_listings
+        RankedJobMatch(job=listing, scoring_result=result)
+        for listing, result in zip(all_listings, scoring_results)
     ]
     scored.sort(key=lambda m: m.scoring_result.overall_score, reverse=True)
 

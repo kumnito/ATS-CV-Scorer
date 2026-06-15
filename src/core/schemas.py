@@ -145,7 +145,6 @@ class ScoreBreakdown(BaseModel):
     semantic_similarity: float
     keyword_match: float
     structure_completeness: float
-    ai_feedback_score: Optional[float] = None
 
 
 class ScoringResult(BaseModel):

@@ -13,14 +13,11 @@ from src.core.lexicons import (
     PROPER_NOUN_RUN_RE,
     SECTION_HEADERS,
     SECTOR_KEYWORDS,
-    TECH_SKILLS,
     TITLE_SPLIT_RE,
     YEAR_RANGE_RE,
     PERSON_NAME_RE,
 )
 from src.core.schemas import NormalizedCV, ParsedCV
-
-TECH_SKILLS = TECH_SKILLS  # re-export for external callers that imported it from here
 
 _ALL_SKILLS = ALL_SKILLS
 
@@ -28,25 +25,6 @@ _ALL_SKILLS = ALL_SKILLS
 class NLPPipeline:
     def __init__(self, model: str = "en_core_web_sm") -> None:
         self.nlp = spacy.load(model)
-
-    def parse_cv(self, text: str) -> ParsedCV:
-        """Parse a raw CV text string into a ParsedCV (text-based path)."""
-        cleaned = _clean_text(text)
-        sections = _detect_sections(cleaned)
-        doc = self.nlp(cleaned[:100_000])
-        entities = _extract_entities(doc)
-        header = sections.get("header", "")
-
-        return ParsedCV(
-            raw_text=cleaned,
-            sections=sections,
-            entities=entities,
-            skills=_extract_skills(cleaned),
-            experience_years=_estimate_experience_years(sections.get("experience", "")),
-            keywords=_extract_keywords(doc),
-            job_title=_extract_job_title(header),
-            location=_extract_location(header, entities),
-        )
 
     def parse_normalized(self, normalized_cv: NormalizedCV) -> ParsedCV:
         """Build a ParsedCV from a NormalizedCV, preferring structured fields.

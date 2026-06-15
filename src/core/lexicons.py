@@ -322,10 +322,6 @@ SECTOR_KEYWORDS: list[tuple[list[str], str]] = [
     (["banque", "finance", "assurance", "comptabilité", "audit"], "finance"),
 ]
 
-# Full occupation titles from ESCO (populated by _merge_generated if available).
-# Distinct from JOB_TITLE_KEYWORDS — these are complete titles, not regex keywords.
-JOB_TITLES: list[str] = []
-
 
 # ---------------------------------------------------------------------------
 # Merge generated lexicons at import time (silent fallback if file absent)
@@ -387,11 +383,6 @@ def _merge_generated() -> tuple[list[str], list[str]]:
                 bucket.append(s)
                 hardcoded_skills.add(s_low)
 
-    # Full job titles (occupation names from ESCO, not keywords).
-    for title in data.get("job_titles", []):
-        if title not in JOB_TITLES:
-            JOB_TITLES.append(title)
-
     extra_en = [
         v.lower() for v in data.get("action_verbs_en", [])
         if v.lower() not in _ACTION_VERBS_EN_BASE
@@ -412,9 +403,6 @@ _extra_verbs_en, _extra_verbs_fr = _merge_generated()
 # Flat set of all skills across all categories (for backward-compatible keyword matching).
 _ALL_SKILLS_SET: set[str] = {s.lower() for cat in SKILL_CATEGORIES.values() for s in cat}
 ALL_SKILLS: list[str] = sorted(_ALL_SKILLS_SET)
-
-# Kept for backward compatibility — nlp_pipeline used this dict structure.
-TECH_SKILLS: dict[str, list[str]] = {k: v for k, v in SKILL_CATEGORIES.items()}
 
 JOB_TITLE_RE = re.compile(
     r"\b(" + "|".join(JOB_TITLE_KEYWORDS) + r")\b", re.IGNORECASE

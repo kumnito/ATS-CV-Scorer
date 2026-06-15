@@ -208,26 +208,6 @@ def pipeline():
     return NLPPipeline()
 
 
-def test_parse_cv_returns_parsed_cv(pipeline):
-    parsed = pipeline.parse_cv(SAMPLE_CV)
-    assert parsed.raw_text
-    assert "experience" in parsed.sections
-    assert "python" in parsed.skills
-    assert parsed.experience_years is not None
-    assert parsed.experience_years > 0
-
-
-def test_parse_cv_extracts_job_title_and_location(pipeline):
-    cv_text = (
-        "Alex Martin\n"
-        "ML Engineer Junior - Paris, France\n"
-        "alex.martin@example.com | +33 6 12 34 56 78\n\n" + SAMPLE_CV
-    )
-    parsed = pipeline.parse_cv(cv_text)
-    assert parsed.job_title == "ML Engineer Junior"
-    assert parsed.location == "Paris"
-
-
 # ---------------------------------------------------------------------------
 # Proposition A — fallback experience[0].title dans parse_normalized
 # ---------------------------------------------------------------------------

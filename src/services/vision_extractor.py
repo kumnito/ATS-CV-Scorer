@@ -41,7 +41,10 @@ class VisionExtractor:
         images[0].save(buf, format="PNG")
         img_b64 = base64.standard_b64encode(buf.getvalue()).decode()
 
-        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        client = anthropic.Anthropic(
+            api_key=settings.anthropic_api_key,
+            timeout=settings.vision_timeout_seconds,
+        )
 
         system_prompt = (
             "Tu es un extracteur de CV expert. "

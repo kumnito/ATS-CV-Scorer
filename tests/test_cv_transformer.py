@@ -6,8 +6,9 @@ Two-column tests are skipped if CV_kumnito_two_columns.pdf is not present
 """
 
 import os
+import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -515,6 +516,46 @@ class TestOCRFallback:
 
         assert isinstance(cv, NormalizedCV)
         assert cv.extraction_method == "pdfplumber"
+
+
+class TestOCRTimeout:
+    """L'OCR doit s'interrompre après settings.ocr_timeout_seconds sans bloquer la requête."""
+
+    def test_ocr_timeout_returns_empty_string(self):
+        import time
+
+        t = CVTransformer()
+
+        def _slow_image_to_string(*args, **kwargs):
+            time.sleep(2)
+            return "texte arrivé trop tard"
+
+        mock_pytesseract = MagicMock()
+        mock_pytesseract.image_to_string.side_effect = _slow_image_to_string
+        mock_pdf2image = MagicMock()
+        mock_pdf2image.convert_from_path.return_value = [MagicMock()]
+
+        with patch("src.services.cv_transformer.settings") as ms, \
+             patch.dict(sys.modules, {"pdf2image": mock_pdf2image, "pytesseract": mock_pytesseract}):
+            ms.ocr_timeout_seconds = 0.1
+            result = t._extract_text_ocr("dummy.pdf")
+
+        assert result == ""
+
+    def test_ocr_completes_within_timeout(self):
+        t = CVTransformer()
+
+        mock_pytesseract = MagicMock()
+        mock_pytesseract.image_to_string.return_value = "texte rapide"
+        mock_pdf2image = MagicMock()
+        mock_pdf2image.convert_from_path.return_value = [MagicMock()]
+
+        with patch("src.services.cv_transformer.settings") as ms, \
+             patch.dict(sys.modules, {"pdf2image": mock_pdf2image, "pytesseract": mock_pytesseract}):
+            ms.ocr_timeout_seconds = 30
+            result = t._extract_text_ocr("dummy.pdf")
+
+        assert "texte rapide" in result
 
 
 class TestVisionLLMFallback:

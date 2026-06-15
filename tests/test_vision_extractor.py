@@ -51,6 +51,32 @@ def test_vision_json_parsing():
     assert cv.extraction_confidence == 0.95
 
 
+def test_vision_extractor_uses_configured_timeout():
+    """L'appel Anthropic Vision est borné par settings.vision_timeout_seconds."""
+    extractor = VisionExtractor()
+    vision_json = '{"header": {"name": "Alice"}, "skills": {}, "experience": [], "education": []}'
+
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=vision_json)]
+    mock_client = MagicMock()
+    mock_client.messages.create.return_value = mock_response
+
+    mock_img = MagicMock()
+    mock_img.save = lambda buf, format: buf.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+    mock_pdf2image = MagicMock()
+    mock_pdf2image.convert_from_path.return_value = [mock_img]
+
+    with patch("src.services.vision_extractor.settings") as mock_settings, \
+         patch.dict(sys.modules, {"pdf2image": mock_pdf2image}), \
+         patch("anthropic.Anthropic", return_value=mock_client) as mock_anthropic:
+        mock_settings.anthropic_api_key = "sk-test-key"
+        mock_settings.claude_model = "claude-sonnet-4-6"
+        mock_settings.vision_timeout_seconds = 60
+        extractor.extract("dummy.pdf")
+
+    mock_anthropic.assert_called_once_with(api_key="sk-test-key", timeout=60)
+
+
 def test_vision_skipped_without_api_key():
     """extract() lève RuntimeError si aucune clé API."""
     extractor = VisionExtractor()

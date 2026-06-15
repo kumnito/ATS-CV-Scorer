@@ -5,6 +5,7 @@ font name) to detect single-column vs two-column layouts and reconstruct a
 semantically-ordered text stream before NLP parsing.
 """
 
+import concurrent.futures
 import logging
 import re
 from dataclasses import dataclass, field
@@ -290,6 +291,10 @@ class CVTransformer:
             sudo apt-get install tesseract-ocr tesseract-ocr-fra poppler-utils
         Dépendances Python (requirements-ocr.txt ou pip install) :
             pytesseract>=0.3.10  pdf2image>=1.17.0  Pillow>=10.0.0
+
+        Exécuté dans un thread avec timeout configurable
+        (`settings.ocr_timeout_seconds`) : si Tesseract dépasse ce délai, on
+        abandonne et la cascade passe au niveau suivant sans bloquer la requête.
         """
         try:
             from pdf2image import convert_from_path  # type: ignore[import]
@@ -301,17 +306,28 @@ class CVTransformer:
                 "apt-get install tesseract-ocr tesseract-ocr-fra poppler-utils"
             ) from exc
 
-        images = convert_from_path(pdf_path, dpi=300)
-        if not images:
-            return ""
+        def _run_ocr() -> str:
+            images = convert_from_path(pdf_path, dpi=300)
+            if not images:
+                return ""
 
-        parts: list[str] = []
-        for img in images:
-            page_text = pytesseract.image_to_string(
-                img, lang="fra+eng", config="--psm 1 --oem 1"
-            )
-            parts.append(page_text)
-        return "\n\n".join(parts)
+            parts: list[str] = []
+            for img in images:
+                page_text = pytesseract.image_to_string(
+                    img, lang="fra+eng", config="--psm 1 --oem 1"
+                )
+                parts.append(page_text)
+            return "\n\n".join(parts)
+
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(_run_ocr)
+        try:
+            return future.result(timeout=settings.ocr_timeout_seconds)
+        except concurrent.futures.TimeoutError:
+            logger.warning("OCR timeout après %ds", settings.ocr_timeout_seconds)
+            return ""
+        finally:
+            executor.shutdown(wait=False)
 
     # ------------------------------------------------------------------
     # Core pipeline — pdfplumber words → NormalizedCV

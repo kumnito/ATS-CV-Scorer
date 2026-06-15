@@ -21,11 +21,11 @@ Portfolio project — ML Engineer track.
 Upload your CV (PDF) only. The pipeline extracts your **job title**,
 **skills**, **location** and **sector**, runs an immediate **CV quality
 report** (ATS readability + profile strength + prioritized
-recommendations), then automatically searches matching job listings via the
-**Adzuna** API, scores each one against your profile with a semantic
-similarity engine, and ranks them. You can then request a **personalized
-Claude AI analysis per listing, on demand** — no AI call is triggered until
-you click "Analyser cette offre".
+recommendations), then automatically searches matching job listings across
+**multiple sources** (Adzuna, Jooble, France Travail), scores each one
+against your profile with a semantic similarity engine, and ranks them. You
+can then request a **personalized Claude AI analysis per listing, on
+demand** — no AI call is triggered until you click "Analyser cette offre".
 
 ## Architecture
 
@@ -42,12 +42,12 @@ flowchart TD
     F --> G["NLPPipeline<br/>job title, location,<br/>sector, skills"]
     F --> H["CVQualityScorer<br/>ATS readability +<br/>profile strength +<br/>recommendations"]
 
-    G --> I["Adzuna<br/>job search"]
+    G --> I["JobSearchOrchestrator<br/>Adzuna · Jooble · France Travail"]
     I --> J["Semantic scoring<br/>& ranking"]
     J --> K["On-demand Claude<br/>feedback per listing"]
 
     H -.shown immediately,<br/>no API call.-> Tab1["Tab: Analyse du CV"]
-    J -.requires Adzuna keys.-> Tab2["Tab: Recherche d'offres"]
+    J -.Adzuna always on,<br/>Jooble/FT if configured.-> Tab2["Tab: Recherche d'offres"]
     K -.requires Anthropic key,<br/>session-rate-limited.-> Tab2
 ```
 
@@ -60,7 +60,7 @@ flowchart TD
 | Semantic scoring | `sentence-transformers` (all-MiniLM-L6-v2) |
 | CV quality scoring | custom rule-based scorer — ATS readability, profile strength, prioritized recommendations |
 | AI feedback | Anthropic Claude API (responses in French, prompt caching) |
-| Job search | Adzuna API (`httpx`) |
+| Job search | Multi-source orchestrator (`httpx`) — Adzuna, Jooble, France Travail (OAuth2) |
 | API | FastAPI |
 | UI | Gradio (two tabs, custom "Tech Dashboard" theme) |
 | Deployment | Hugging Face Spaces (Docker, Python 3.12) |
@@ -105,14 +105,24 @@ Triggered as soon as a CV is uploaded, no external API calls required.
 
 Reuses the CV already parsed in Tab 1 (no re-processing).
 
-4. **Job search** — Adzuna is queried with multiple query variants (base
-   title, synonyms, title × sector), deduplicated by URL. The job title can
-   be edited before searching. Search is scoped to the detected
+4. **Source status** — on tab load, availability of the three job
+   providers (Adzuna, Jooble, France Travail) is checked in parallel and
+   shown as status cards (✅ available + latency / ⏳ checking / ❌
+   unavailable or missing credentials). Each source can be toggled on/off;
+   Adzuna is on by default, the others default to on only if their
+   credentials are configured.
+5. **Job search** — the `JobSearchOrchestrator` queries every active
+   provider with multiple query variants (base title, synonyms, title ×
+   sector), merges and deduplicates results by URL across sources. The job
+   title can be edited before searching. Search is scoped to the detected
    location/postal code (30 km radius) or to a manually-selected French
    region, which always takes priority.
-5. **Scoring** — each listing is scored against your CV with the semantic
-   engine, filtered by a minimum-relevance threshold, and ranked.
-6. **AI feedback** — click "Analyser cette offre" on any listing to get a
+6. **Scoring & filtering** — each listing is scored against your CV with
+   the semantic engine, filtered by a minimum-relevance threshold, and
+   ranked. A stats line shows the per-source counts and the number of
+   duplicates removed. Results can be further filtered by source or by
+   "known salary only", without re-running the search.
+7. **AI feedback** — click "Analyser cette offre" on any listing to get a
    personalized, French-language Claude analysis (skill gaps, ATS keyword
    suggestions, structural improvements).
 
@@ -145,6 +155,27 @@ All colors/backgrounds use Gradio's native CSS variables
 (`--body-text-color`, `--background-fill-*`, `--border-color-*`), so the
 dashboard remains readable in both light and dark mode.
 
+## Multi-source job search
+
+Job listings are fetched through a `JobProvider` interface
+(`src/services/job_providers/`) and merged by a `JobSearchOrchestrator`:
+
+| Provider | Coverage | Auth |
+|---|---|---|
+| **Adzuna** | FR native | API ID + key |
+| **Jooble** | International | API key |
+| **France Travail** | Official FR job board | OAuth2 client credentials (thread-safe token cache) |
+
+- `check_availability()` runs for all providers in parallel (thread pool) on
+  tab load, so the UI shows real-time status without slowing down searches.
+- `search()` runs per-provider with graceful degradation: if a provider is
+  unavailable, missing credentials, or raises an error, it's skipped and the
+  others still return results — Adzuna alone is enough to keep the feature
+  working.
+- Results are merged and deduplicated by URL, then scored and ranked
+  together. Each listing carries its source (colored pill: Adzuna indigo,
+  Jooble green, France Travail blue) for traceability.
+
 ## API budget protections (demo deployment)
 
 The live demo runs on a rate-limited `ANTHROPIC_API_KEY`:
@@ -162,7 +193,9 @@ The live demo runs on a rate-limited `ANTHROPIC_API_KEY`:
 ## Local setup
 
 ```bash
-cp .env.example .env      # add ANTHROPIC_API_KEY and ADZUNA_ID / ADZUNA_API_KEY
+cp .env.example .env      # add ANTHROPIC_API_KEY, ADZUNA_ID / ADZUNA_API_KEY,
+                           # and optionally JOOBLE_API_KEY,
+                           # FRANCE_TRAVAIL_CLIENT_ID / FRANCE_TRAVAIL_CLIENT_SECRET
 make install               # runtime deps
 make install-dev           # + pytest, fpdf2, reportlab (for tests/benchmark)
 make run                    # Gradio UI → http://localhost:7860

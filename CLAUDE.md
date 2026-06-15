@@ -548,3 +548,86 @@ primary/secondary`, `--border-color-primary`, `--color-accent(-soft)`.
 234/234 tests verts (app.py hors suite). Commit `e4c701f`, push `origin` +
 `hf`. README mis à jour (commit `4f8bccc`) avec une section "UI — Tech
 Dashboard".
+
+---
+
+## Travaux réalisés (session du 2026-06-15 — session 2) : recherche multi-sources
+
+### Phase 1-3 : Provider pattern (Adzuna, Jooble, France Travail)
+
+Nouveau package `src/services/job_providers/` :
+
+- `base.py` — ABC `JobProvider` : `name`, `color`, `check_availability() ->
+  tuple[bool, float]` (disponibilité + latence ms), `search(query,
+  location=None, max_results=20, distance=None) -> list[JobListing]`.
+- `adzuna.py` — `AdzunaProvider`, extrait de l'ancien `JobSearchService`.
+  Couleur indigo `#6366f1`.
+- `jooble.py` — `JoobleProvider` (API POST, clé `JOOBLE_API_KEY`). Couleur
+  verte `#10b981`. `distance` → `radius` dans le payload.
+- `france_travail.py` — `FranceTravailProvider`, OAuth2 client credentials
+  (`FRANCE_TRAVAIL_CLIENT_ID`/`_SECRET`). Couleur bleue `#2563eb`. Localisation
+  résolue en département via `_extract_department_code` (code postal → 2
+  premiers chiffres). `distance` → `rayon` (défaut 30).
+- `oauth2_token_manager.py` — `OAuth2TokenManager` thread-safe
+  (`threading.Lock`) : `get_token()` (cache, buffer expiration 60s) vs
+  `refresh()` (forcé, utilisé par `check_availability()`).
+- `orchestrator.py` — `JobSearchOrchestrator(providers)` :
+  `check_all_availability()` (ThreadPoolExecutor, parallèle),
+  `search(query, location=None, active_providers=None, max_results=20,
+  distance=None)` — fusionne + déduplique par URL, dégradation gracieuse si
+  un provider échoue ou est inactif. `active_providers=None` → tous les
+  providers.
+
+`JobListing` (`schemas.py`) : nouveaux champs `source: str = "adzuna"`,
+`source_color: str = "#6366f1"`.
+
+Commits `948511e` (Adzuna provider), `6f51cea` (Jooble), `1799b6b`
+(France Travail OAuth2).
+
+### Phase 4 : UI multi-sources (`app.py`)
+
+**Initialisation** : `_providers` (liste des 3 providers) → `_orchestrator
+= JobSearchOrchestrator(providers=_providers)`. `_PROVIDER_LABELS` (dict
+nom → (label affiché, tagline)). `_default_active_providers()` : Adzuna
+toujours actif, Jooble/France Travail actifs par défaut seulement si leurs
+credentials sont configurés.
+
+**`job_matcher.find_matching_jobs`** : nouveau paramètre
+`active_providers`, transmis à `job_search.search(...)`. `JobSearchResult`
+enrichi de `source_counts: dict[str, int]` (via `Counter`) et
+`duplicates_removed: int` (calculé sur l'ensemble multi-requêtes).
+`JobSearchService.search` (single-provider wrapper, conservé pour
+`src/api/server.py`) accepte `active_providers` mais l'ignore.
+
+**UI (`app.py`)** :
+- `sources_html` (`gr.HTML`) : 3 cards statut (✅ vert + latence / ⏳ amber
+  / ❌ rouge), peuplées par `demo.load(fn=on_load_check_providers, ...)` —
+  `check_all_availability()` tourne **au chargement de l'onglet**, pas à la
+  recherche.
+- `active_providers_checkbox` (`gr.CheckboxGroup`) : sources actives,
+  valeur par défaut `_default_active_providers()`, transmise à `on_search`
+  → `find_matching_jobs(..., active_providers=...)`.
+- `_format_job_card` : pill colorée par source (`_source_pill_html`, classe
+  CSS `.source-pill`, couleur = `job.source_color` + fond à 10% d'opacité
+  `{color}1a`).
+- `source_stats_md` : ligne "Adzuna (N) · Jooble (N) · France Travail (N) ·
+  doublons retirés (N)" via `_format_source_stats`.
+- `source_filter_dropdown` + `salary_filter_checkbox` : filtrent
+  `matches_state` côté client (`on_filter_change` → `_render_job_slots`),
+  **sans relancer la recherche**.
+- `query_display` rendu source-agnostic ("🔍 Requête :" au lieu de "Requête
+  Adzuna").
+- `on_search` : remplace `_job_search_service` par `_orchestrator`,
+  réinitialise les filtres (source = "Toutes sources", salaire = False) à
+  chaque nouvelle recherche.
+
+**Tests** : signatures `search()` mises à jour partout (providers, fakes,
+orchestrator) pour inclure `distance` et `active_providers`. 269/269 tests
+verts. Validation `make run` end-to-end via `gradio_client`/`httpx` brut
+(upload CV → 15 offres, stats "Adzuna (10) · Jooble (5) · doublons retirés
+(4)", filtre par source fonctionnel). France Travail répond ❌ en local
+(token OAuth2 400 — credentials/scope à vérifier séparément, hors scope de
+cette session).
+
+Commit prévu : `feat: UI multi-sources (Adzuna + Jooble + France Travail) +
+statut API temps réel`.

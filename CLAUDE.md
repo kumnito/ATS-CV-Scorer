@@ -625,9 +625,28 @@ enrichi de `source_counts: dict[str, int]` (via `Counter`) et
 orchestrator) pour inclure `distance` et `active_providers`. 269/269 tests
 verts. Validation `make run` end-to-end via `gradio_client`/`httpx` brut
 (upload CV → 15 offres, stats "Adzuna (10) · Jooble (5) · doublons retirés
-(4)", filtre par source fonctionnel). France Travail répond ❌ en local
-(token OAuth2 400 — credentials/scope à vérifier séparément, hors scope de
-cette session).
+(4)", filtre par source fonctionnel).
 
-Commit prévu : `feat: UI multi-sources (Adzuna + Jooble + France Travail) +
-statut API temps réel`.
+Commits `58fcdc1` (docs) + `462751f` (feat), push `origin` + `hf`.
+
+### Fix France Travail OAuth2 — `invalid_client` sur `/connexion/oauth2/access_token`
+
+**Symptôme** : `check_availability()` → ❌, token endpoint renvoyait 400
+`{"error":"invalid_client","error_description":"Client authentication
+failed"}`. Code (`oauth2_token_manager.py`/`france_travail.py`) déjà
+conforme à la spec (realm `/partenaire`, Content-Type form-urlencoded,
+scope `api_offresdemploiv2 o2dsoffre`, client_id/secret bien lus depuis
+`.env`, pas d'espace parasite) — testé avec body params et Basic Auth,
+même erreur dans les deux cas → la cause n'était pas dans le code.
+
+**Cause réelle** : l'application francetravail.io n'était pas
+**abonnée à l'API "Offres d'emploi v2"** (souscription distincte de la
+simple création de l'app).
+
+**Fix** : abonnement ajouté côté francetravail.io par l'utilisateur (aucun
+changement de code). Vérifié : `check_availability()` → ✅ (~103 ms),
+`search("Data Scientist", location="59170 Croix")` → 6 offres mappées
+correctement (titre, entreprise, localisation, source=`france_travail`).
+
+**Les 3 providers (Adzuna, Jooble, France Travail) sont désormais
+pleinement opérationnels.**

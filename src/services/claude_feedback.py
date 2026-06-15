@@ -4,7 +4,7 @@ import anthropic
 
 from src.core.budget_guard import budget_guard
 from src.core.config import settings
-from src.core.schemas import ParsedCV, ScoringResult
+from src.core.schemas import NormalizedCV, ScoringResult
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ class ClaudeFeedback:
 
     def generate_feedback(
         self,
-        parsed_cv: ParsedCV,
+        parsed_cv: NormalizedCV,
         job_description: str,
         scoring_result: ScoringResult,
     ) -> str:
@@ -49,7 +49,7 @@ class ClaudeFeedback:
 {job_description[:2000]}
 
 ## CV Analysis
-**Detected skills:** {", ".join(parsed_cv.skills[:25]) or "none"}
+**Detected skills:** {", ".join(parsed_cv.skills_flat[:25]) or "none"}
 **Sections found:** {", ".join(parsed_cv.sections.keys())}
 **Years of experience:** {parsed_cv.experience_years or "undetermined"}
 

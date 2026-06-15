@@ -1,6 +1,6 @@
 import pytest
 
-from src.core.schemas import ParsedCV
+from src.core.schemas import NormalizedCV
 from src.services.semantic_scorer import SemanticScorer
 
 
@@ -9,11 +9,11 @@ def scorer() -> SemanticScorer:
     return SemanticScorer()
 
 
-def _parsed_cv(raw_text: str) -> ParsedCV:
-    return ParsedCV(
+def _parsed_cv(raw_text: str) -> NormalizedCV:
+    return NormalizedCV(
         raw_text=raw_text,
         sections={"experience": "...", "education": "...", "skills": "python docker"},
-        skills=["python", "docker"],
+        skills_flat=["python", "docker"],
     )
 
 

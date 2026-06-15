@@ -17,15 +17,15 @@ from src.core.lexicons import (
     YEAR_RANGE_RE,
     PERSON_NAME_RE,
 )
-from src.core.schemas import NormalizedCV, ParsedCV
+from src.core.schemas import NormalizedCV
 
 
 class NLPPipeline:
     def __init__(self, model: str = "en_core_web_sm") -> None:
         self.nlp = spacy.load(model)
 
-    def parse_normalized(self, normalized_cv: NormalizedCV) -> ParsedCV:
-        """Build a ParsedCV from a NormalizedCV, preferring structured fields.
+    def parse_normalized(self, normalized_cv: NormalizedCV) -> NormalizedCV:
+        """Enrich a NormalizedCV with derived fields, preferring structured fields.
 
         Structured fields (job_title, location, skills, experience_years,
         sections) are taken directly from NormalizedCV where available —
@@ -58,18 +58,18 @@ class NLPPipeline:
         postal_code = normalized_cv.header.postal_code
         sector = _extract_sector(normalized_cv)
 
-        return ParsedCV(
-            raw_text=cleaned,
-            sections=sections,
-            entities=entities,
-            skills=all_skills or _extract_skills(cleaned),
-            experience_years=exp_years,
-            keywords=_extract_keywords(doc),
-            job_title=job_title,
-            location=location,
-            postal_code=postal_code,
-            sector=sector,
-        )
+        return normalized_cv.model_copy(update={
+            "raw_text": cleaned,
+            "sections": sections,
+            "entities": entities,
+            "skills_flat": all_skills or _extract_skills(cleaned),
+            "experience_years": exp_years,
+            "keywords": _extract_keywords(doc),
+            "job_title": job_title,
+            "location": location,
+            "postal_code": postal_code,
+            "sector": sector,
+        })
 
 
 # --- helpers (module-level for testability) ---

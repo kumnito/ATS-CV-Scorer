@@ -201,7 +201,7 @@ def _format_profile_summary(parsed_cv, normalized_cv: NormalizedCV) -> str:
     meta = []
     if location:
         meta.append(f"📍 {location}")
-    top_skills = (parsed_cv.skills or [])[:6]
+    top_skills = (parsed_cv.skills_flat or [])[:6]
     if top_skills:
         meta.append("🛠 " + ", ".join(top_skills))
 

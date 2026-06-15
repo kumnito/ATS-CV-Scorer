@@ -5,7 +5,7 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 
-from src.core.schemas import ParsedCV, ScoreBreakdown, ScoringResult
+from src.core.schemas import NormalizedCV, ScoreBreakdown, ScoringResult
 
 _STOP_WORDS = {
     "the",
@@ -77,7 +77,7 @@ class SemanticScorer:
 
     def score(
         self,
-        parsed_cv: ParsedCV,
+        parsed_cv: NormalizedCV,
         job_description: str,
         cv_embedding: np.ndarray | None = None,
     ) -> ScoringResult:
@@ -92,7 +92,7 @@ class SemanticScorer:
 
     def score_many(
         self,
-        parsed_cv: ParsedCV,
+        parsed_cv: NormalizedCV,
         job_descriptions: list[str],
         cv_embedding: np.ndarray | None = None,
     ) -> list[ScoringResult]:
@@ -131,7 +131,7 @@ def _truncate_to_tokens(model: SentenceTransformer, text: str) -> str:
     return tokenizer.decode(token_ids)
 
 
-def _build_result(parsed_cv: ParsedCV, job_description: str, semantic: float) -> ScoringResult:
+def _build_result(parsed_cv: NormalizedCV, job_description: str, semantic: float) -> ScoringResult:
     jd_keywords = _extract_jd_keywords(job_description)
     keyword = _keyword_match_score(parsed_cv.raw_text, jd_keywords)
     structure = _structure_score(parsed_cv)
@@ -159,7 +159,7 @@ def _keyword_match_score(cv_text: str, jd_keywords: list[str]) -> float:
     return matched / len(jd_keywords)
 
 
-def _structure_score(parsed_cv: ParsedCV) -> float:
+def _structure_score(parsed_cv: NormalizedCV) -> float:
     score = sum(
         0.25
         for s in _IMPORTANT_SECTIONS
@@ -170,8 +170,8 @@ def _structure_score(parsed_cv: ParsedCV) -> float:
         for s in _NICE_SECTIONS
         if s in parsed_cv.sections and parsed_cv.sections[s]
     )
-    if parsed_cv.skills:
-        score += min(len(parsed_cv.skills) / 10, 0.15)
+    if parsed_cv.skills_flat:
+        score += min(len(parsed_cv.skills_flat) / 10, 0.15)
     return min(1.0, score)
 
 

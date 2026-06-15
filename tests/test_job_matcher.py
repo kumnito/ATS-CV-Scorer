@@ -1,4 +1,4 @@
-from src.core.schemas import JobListing, ParsedCV, ScoreBreakdown, ScoringResult
+from src.core.schemas import JobListing, NormalizedCV, ScoreBreakdown, ScoringResult
 from src.services.job_matcher import (
     JobSearchResult,
     _build_query,
@@ -56,8 +56,8 @@ class _LowScorer:
         return [self.score(parsed_cv, d) for d in descriptions]
 
 
-def _parsed_cv(job_title="ML Engineer", location="Croix", postal_code=None, sector=None) -> ParsedCV:
-    return ParsedCV(
+def _parsed_cv(job_title="ML Engineer", location="Croix", postal_code=None, sector=None) -> NormalizedCV:
+    return NormalizedCV(
         raw_text="...",
         job_title=job_title,
         location=location,
@@ -73,7 +73,7 @@ def test_build_query_strips_seniority_qualifiers():
 
 
 def test_build_query_falls_back_to_skills_without_job_title():
-    cv = ParsedCV(raw_text="...", skills=["python", "pytorch", "docker", "sql"])
+    cv = NormalizedCV(raw_text="...", skills_flat=["python", "pytorch", "docker", "sql"])
     assert _build_query(cv) == "python pytorch docker"
 
 
@@ -83,7 +83,7 @@ def test_build_query_trims_company_name_from_title():
 
 
 def test_build_query_uses_commerce_skills_as_fallback():
-    cv = ParsedCV(raw_text="...", job_title=None, skills=["vente", "service client", "merchandising"])
+    cv = NormalizedCV(raw_text="...", job_title=None, skills_flat=["vente", "service client", "merchandising"])
     assert _build_query(cv) == "vente service client merchandising"
 
 
@@ -161,7 +161,7 @@ class TestBuildQueries:
         assert len(queries) <= 3
 
     def test_returns_empty_when_no_title_and_no_skills(self):
-        cv = ParsedCV(raw_text="...", job_title=None, skills=[])
+        cv = NormalizedCV(raw_text="...", job_title=None, skills_flat=[])
         assert _build_queries(cv) == []
 
 
@@ -243,7 +243,7 @@ def test_find_matching_jobs_returns_empty_list_without_location_or_region():
 
 def test_find_matching_jobs_returns_empty_list_without_query():
     job_search = _FakeJobSearch({})
-    cv = ParsedCV(raw_text="...", job_title=None, skills=[], location="Croix")
+    cv = NormalizedCV(raw_text="...", job_title=None, skills_flat=[], location="Croix")
 
     assert find_matching_jobs(cv, job_search, _FakeScorer()).matches == []
     assert job_search.calls == []

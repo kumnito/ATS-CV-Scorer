@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 from src.core.budget_guard import BudgetGuard
-from src.core.schemas import ParsedCV, ScoreBreakdown, ScoringResult
+from src.core.schemas import NormalizedCV, ScoreBreakdown, ScoringResult
 from src.services import claude_feedback
 from src.services.claude_feedback import ClaudeBudgetExceeded, ClaudeFeedback, ClaudeServiceError
 
@@ -18,11 +18,11 @@ def _isolated_budget_guard(tmp_path, monkeypatch):
     yield guard
 
 
-def _make_parsed_cv() -> ParsedCV:
-    return ParsedCV(
+def _make_parsed_cv() -> NormalizedCV:
+    return NormalizedCV(
         raw_text="Some CV text",
         sections={"experience": "..."},
-        skills=["python", "docker"],
+        skills_flat=["python", "docker"],
         experience_years=3.0,
     )
 

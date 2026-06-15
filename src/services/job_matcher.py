@@ -5,13 +5,13 @@ from typing import Optional
 import numpy as np
 
 from src.core.lexicons import JOB_TITLE_RE, JOB_TITLE_SYNONYMS
-from src.core.schemas import ParsedCV, RankedJobMatch
+from src.core.schemas import NormalizedCV, RankedJobMatch
 from src.services.job_search import JobSearchService
 from src.services.semantic_scorer import SemanticScorer
 
 # Seniority qualifiers narrow Adzuna's `what` search too aggressively
 # (e.g. "ML Engineer Junior" returns 0 results where "ML Engineer" returns many).
-# Stripped only from the *search query* — ParsedCV.job_title keeps the full title.
+# Stripped only from the *search query* — NormalizedCV.job_title keeps the full title.
 _SENIORITY_RE = re.compile(
     r"\b(junior|senior|lead|principal|staff|intern|associate)\b", re.IGNORECASE
 )
@@ -75,13 +75,13 @@ def _trim_title_for_query(title: str) -> str:
     return " ".join(words[: last_kw + 3])
 
 
-def _build_query(parsed_cv: ParsedCV) -> str:
+def _build_query(parsed_cv: NormalizedCV) -> str:
     if parsed_cv.job_title:
         cleaned = _SENIORITY_RE.sub("", parsed_cv.job_title)
         cleaned = _trim_title_for_query(re.sub(r"\s+", " ", cleaned).strip())
         if cleaned:
             return cleaned
-    return " ".join(parsed_cv.skills[:3])
+    return " ".join(parsed_cv.skills_flat[:3])
 
 
 def _find_synonym_queries(title: str) -> list[str]:
@@ -93,7 +93,7 @@ def _find_synonym_queries(title: str) -> list[str]:
     return []
 
 
-def _build_queries(parsed_cv: ParsedCV) -> list[str]:
+def _build_queries(parsed_cv: NormalizedCV) -> list[str]:
     """Build 1–3 query variants: base title, synonym, and/or title+sector."""
     base = _build_query(parsed_cv)
     if not base:
@@ -119,7 +119,7 @@ def _build_queries(parsed_cv: ParsedCV) -> list[str]:
 
 
 def find_matching_jobs(
-    parsed_cv: ParsedCV,
+    parsed_cv: NormalizedCV,
     job_search: JobSearchService,
     scorer: SemanticScorer,
     max_results: int = 20,

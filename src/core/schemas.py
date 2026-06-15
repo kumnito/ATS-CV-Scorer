@@ -76,6 +76,19 @@ class NormalizedCV(BaseModel):
     extraction_method: str = "pdfplumber"   # "pdfplumber" | "ocr" | "vision_llm"
     extraction_confidence: float = 1.0       # 0.0 – 1.0
 
+    # Champs enrichis par NLPPipeline.parse_normalized() — résolution des
+    # valeurs (titre, localisation, secteur...) via fallback regex/NER/spaCy
+    # sur raw_text, en complément des champs structurés ci-dessus.
+    sections: dict[str, str] = Field(default_factory=dict)
+    entities: dict[str, list[str]] = Field(default_factory=dict)
+    keywords: list[str] = Field(default_factory=list)
+    skills_flat: list[str] = Field(default_factory=list)
+    experience_years: Optional[float] = None
+    job_title: Optional[str] = None
+    location: Optional[str] = None
+    postal_code: Optional[str] = None
+    sector: Optional[str] = None
+
 
 # ---------------------------------------------------------------------------
 # CV Quality Report — 3 axes indépendants
@@ -123,24 +136,6 @@ class CVQualityReport(BaseModel):
     extraction_confidence: float = 1.0
 
 
-# ---------------------------------------------------------------------------
-# Existing models (unchanged)
-# ---------------------------------------------------------------------------
-
-
-class ParsedCV(BaseModel):
-    raw_text: str
-    sections: dict[str, str] = Field(default_factory=dict)
-    entities: dict[str, list[str]] = Field(default_factory=dict)
-    skills: list[str] = Field(default_factory=list)
-    experience_years: Optional[float] = None
-    keywords: list[str] = Field(default_factory=list)
-    job_title: Optional[str] = None
-    location: Optional[str] = None
-    postal_code: Optional[str] = None
-    sector: Optional[str] = None
-
-
 class ScoreBreakdown(BaseModel):
     semantic_similarity: float
     keyword_match: float
@@ -157,7 +152,7 @@ class ScoringResult(BaseModel):
 
 class ATSResponse(BaseModel):
     scoring_result: ScoringResult
-    parsed_cv: ParsedCV
+    parsed_cv: NormalizedCV
     processing_time_seconds: float
 
 

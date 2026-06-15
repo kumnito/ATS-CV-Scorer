@@ -261,7 +261,7 @@ def test_extract_skills_detects_retail_commerce_skills():
 
 
 def test_parse_normalized_includes_commerce_skills_for_retail_cv(pipeline):
-    """Un CV retail doit avoir des compétences commerce dans ParsedCV.skills."""
+    """Un CV retail doit avoir des compétences commerce dans NormalizedCV.skills_flat."""
     from src.core.schemas import CVExperience, CVHeader, CVSkills, NormalizedCV
 
     cv = NormalizedCV(
@@ -271,8 +271,8 @@ def test_parse_normalized_includes_commerce_skills_for_retail_cv(pipeline):
         raw_text="vente service client merchandising encaissement",
     )
     parsed = pipeline.parse_normalized(cv)
-    assert "vente" in parsed.skills
-    assert "service client" in parsed.skills
+    assert "vente" in parsed.skills_flat
+    assert "service client" in parsed.skills_flat
 
 
 # ---------------------------------------------------------------------------

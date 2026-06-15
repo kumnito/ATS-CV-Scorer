@@ -442,3 +442,109 @@ strengths/improvements), Recommendations (schema, priorité, impact), action
 nouns FR, career stats, career gaps.
 
 **Total suite (hors cv_transformer) : 146 tests verts.**
+
+---
+
+## Travaux réalisés (session du 2026-06-15)
+
+### 1. Refactor : suppression de `ParsedCV`, `NormalizedCV` unifié
+
+`ParsedCV` (schéma séparé dans `src/core/schemas.py`) supprimé. `NormalizedCV`
+enrichi avec les champs auparavant portés par `ParsedCV` : `sections`,
+`entities`, `keywords`, `skills_flat`, `experience_years`, `job_title`,
+`location`, `postal_code`, `sector`.
+
+`NLPPipeline.parse_normalized(cv: NormalizedCV) -> NormalizedCV` (au lieu de
+`-> ParsedCV`) : retourne `normalized_cv.model_copy(update={...})` avec ces
+champs résolus. `_extract_skills` réécrit autour de `ALL_SKILLS_RE` (regex
+pré-compilée, remplace le scan O(n) sur `ALL_SKILLS`).
+
+`src/core/lexicons.py` : la fusion `lexicons_generated.json` + le calcul des
+structures dérivées (`ALL_SKILLS`, `ALL_SKILLS_RE`, `JOB_TITLE_RE`,
+`ACTION_VERBS_EN/FR`) sont déplacés dans `init_lexicons()` — idempotent,
+appelée explicitement au démarrage de `app.py` et `src/api/server.py`
+(plus de calcul au moment de l'import du module).
+
+Tous les services (`semantic_scorer`, `claude_feedback`, `job_matcher`) et
+`app.py` utilisent `NormalizedCV` + `.skills_flat` (suppression de
+`.skills` liste plate sur ce type). `ATSResponse.parsed_cv` est désormais
+`NormalizedCV`.
+
+`src/api/server.py` : nouveau context manager async `_tmp_pdf(cv_file)`
+(validation MIME + taille + écriture/suppression du fichier temporaire),
+factorisé pour `/score` et `/find-jobs` (suppression de code dupliqué).
+
+Suppression de code mort : `NLPPipeline.parse_cv()`, `JOB_TITLES`,
+`TECH_SKILLS`, `ai_feedback_score` (ScoreBreakdown).
+
+**Total suite : 234/234 tests verts.**
+
+### 2. Refonte UI — thème "Tech Dashboard" (`app.py`)
+
+Nouveau thème Gradio custom : `gr.themes.Base(primary_hue=indigo,
+secondary_hue=slate, neutral_hue=slate, font=Inter, font_mono=[GoogleFont
+("JetBrains Mono")])` + `CUSTOM_CSS` injecté via `gr.Blocks(theme=THEME,
+css=CUSTOM_CSS)`.
+
+**Piège gradio 4.44.0** : `font_mono` doit être passé en **liste**
+(`[gr.themes.GoogleFont(...)]`) — un `GoogleFont` nu fait planter
+`gr.themes.Base.__init__` (`TypeError: 'GoogleFont' object is not
+iterable`), car le wrap automatique en liste ne s'applique qu'à `font`,
+pas à `font_mono`, dans cette version.
+
+**Nouveaux éléments** :
+- `_format_metrics_html()` (`gr.HTML`, onglet 1, avant les détails) : 4
+  cards horizontales (Lisibilité ATS, Profil, Mots-clés, Expérience) +
+  badge méthode d'extraction (`_extraction_badge_html` : ✅ native / ⚠️ OCR
+  / 🤖 Vision IA + confiance %).
+- `_format_skill_badges()` (`gr.HTML` séparé) : compétences en badges,
+  groupées par catégorie (ML/MLOps/Cloud/Data/Langages/Autres/Commerce) —
+  remplace la liste plate retirée de `_format_profile_summary`.
+- `_format_timeline()` réécrit en HTML (`.timeline-entry`/dot/title/meta/
+  badge) : point vert = expérience, indigo = formation, amber = trou de
+  carrière (`career_gaps`).
+- `_format_job_card()` réécrit : `.result-card`, score affiché en grand
+  (22px) coloré par seuil via `_score_color_hex()` (≥70 vert `#22c55e`,
+  ≥50 amber `#f59e0b`, <50 rouge `#ef4444`).
+- `_progress_bar_html()` : barre HTML générique, remplace l'ancien rendu
+  Markdown `███░░░` (utilisée pour la barre "Profil").
+- `elem_classes=["cv-upload"]` sur `cv_input` (zone dashed + hover),
+  `elem_classes=["analyze-outline"]` sur les boutons "Analyser cette offre".
+
+`_upload_outputs`, `on_cv_upload`, `on_cv_clear` étendus avec les deux
+nouveaux `gr.HTML()` (`metrics_html`, `skills_html`).
+
+Commit `28901f2`, push `origin` + `hf`.
+
+### 3. Correctif contraste dark mode (`app.py`)
+
+**Symptôme** : sur HF Spaces en dark mode, titres de sections et texte des
+cards quasi invisibles — seuls badges et scores (couleurs auto-portées)
+restaient lisibles.
+
+**Cause** : `CUSTOM_CSS` forçait des fonds clairs hardcodés (fond de page
+`#f8fafc`, cards `#ffffff`) pendant que le texte Gradio (`--body-text-
+color`) bascule en clair sous `.dark` → texte clair sur fond clair forcé.
+
+**Fix** : toutes les variables `--app-*` remappées sur les variables
+natives Gradio (qui basculent automatiquement avec la classe `.dark`) :
+- `--app-border` → `var(--border-color-primary)`
+- `--app-card-bg` → `var(--background-fill-primary)`
+- `--app-text-secondary` → `var(--body-text-color-subdued)`
+- fond `.gradio-container` → `var(--background-fill-secondary)`
+- `.result-card`/`.metric-card`/`.timeline-entry` reçoivent
+  `color: var(--body-text-color)` (hérité par `.metric-value`,
+  `.timeline-title`, titre/score d'offre).
+- `--app-badge-bg`/`--app-badge-text` (indigo-50/700) : override
+  `.dark .gradio-container { ... }` → indigo-900/200.
+- Accents `#4338ca` (faible contraste sur fond sombre) remplacés par
+  `#6366f1` (onglet actif, hover bouton "Analyser").
+
+**Note** : les noms `--color-text-primary`, `--color-background-info`,
+etc. (parfois cités dans des specs UI) **n'existent pas** dans gradio
+4.44 — utiliser `--body-text-color(-subdued)`, `--background-fill-
+primary/secondary`, `--border-color-primary`, `--color-accent(-soft)`.
+
+234/234 tests verts (app.py hors suite). Commit `e4c701f`, push `origin` +
+`hf`. README mis à jour (commit `4f8bccc`) avec une section "UI — Tech
+Dashboard".

@@ -6,7 +6,7 @@ from typing import Optional
 import spacy
 
 from src.core.lexicons import (
-    ALL_SKILLS,
+    ALL_SKILLS_RE,
     JOB_TITLE_RE,
     LOCATION_BLOCKLIST,
     POSTAL_CODE_CITY_RE,
@@ -18,8 +18,6 @@ from src.core.lexicons import (
     PERSON_NAME_RE,
 )
 from src.core.schemas import NormalizedCV, ParsedCV
-
-_ALL_SKILLS = ALL_SKILLS
 
 
 class NLPPipeline:
@@ -208,11 +206,7 @@ def _extract_location(
 
 def _extract_skills(text: str) -> list[str]:
     text_lower = text.lower()
-    return sorted(
-        skill
-        for skill in _ALL_SKILLS
-        if re.search(r"\b" + re.escape(skill) + r"\b", text_lower)
-    )
+    return sorted(set(ALL_SKILLS_RE.findall(text_lower)))
 
 
 def _estimate_experience_years(experience_text: str) -> Optional[float]:

@@ -10,6 +10,7 @@ import gradio_client.utils as _gradio_client_utils
 
 from src.core.budget_guard import budget_guard
 from src.core.config import settings
+from src.core.lexicons import init_lexicons
 from src.core.schemas import CVQualityReport, NormalizedCV
 from src.services.claude_feedback import ClaudeBudgetExceeded, ClaudeFeedback, ClaudeServiceError
 from src.services.cv_quality_scorer import CVQualityScorer
@@ -36,6 +37,8 @@ def _patch_gradio_client_bool_schema() -> None:
 
 
 _patch_gradio_client_bool_schema()
+
+init_lexicons()
 
 _cv_transformer = CVTransformer()
 _nlp_pipeline = NLPPipeline()

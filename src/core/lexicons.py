@@ -394,19 +394,49 @@ def _merge_generated() -> tuple[list[str], list[str]]:
     return extra_en, extra_fr
 
 
-_extra_verbs_en, _extra_verbs_fr = _merge_generated()
-
 # ---------------------------------------------------------------------------
-# Derived symbols — must be computed AFTER _merge_generated() has run
+# Derived symbols — computed by init_lexicons(), called once below
 # ---------------------------------------------------------------------------
 
-# Flat set of all skills across all categories (for backward-compatible keyword matching).
-_ALL_SKILLS_SET: set[str] = {s.lower() for cat in SKILL_CATEGORIES.values() for s in cat}
-ALL_SKILLS: list[str] = sorted(_ALL_SKILLS_SET)
+# Flat list of all skills across all categories (for backward-compatible keyword matching).
+ALL_SKILLS: list[str] = []
+# Single compiled alternation regex matching any skill in ALL_SKILLS (built by init_lexicons()).
+ALL_SKILLS_RE: re.Pattern = re.compile(r"(?!)")
+JOB_TITLE_RE: re.Pattern = re.compile(r"(?!)")
+ACTION_VERBS_EN: frozenset[str] = frozenset()
+ACTION_VERBS_FR: frozenset[str] = frozenset()
 
-JOB_TITLE_RE = re.compile(
-    r"\b(" + "|".join(JOB_TITLE_KEYWORDS) + r")\b", re.IGNORECASE
-)
+_initialized = False
 
-ACTION_VERBS_EN: frozenset[str] = frozenset(_ACTION_VERBS_EN_BASE | set(_extra_verbs_en))
-ACTION_VERBS_FR: frozenset[str] = frozenset(_ACTION_VERBS_FR_BASE | set(_extra_verbs_fr))
+
+def init_lexicons() -> None:
+    """Merge lexicons_generated.json and compute derived lexicon structures.
+
+    Idempotent — safe to call multiple times (e.g. explicitly at startup from
+    app.py / src/api/server.py) and is also invoked once at module import time
+    so that `from src.core.lexicons import ALL_SKILLS` keeps working for
+    callers that don't invoke it explicitly.
+    """
+    global ALL_SKILLS, ALL_SKILLS_RE, JOB_TITLE_RE, ACTION_VERBS_EN, ACTION_VERBS_FR, _initialized
+    if _initialized:
+        return
+
+    extra_verbs_en, extra_verbs_fr = _merge_generated()
+
+    all_skills_set: set[str] = {s.lower() for cat in SKILL_CATEGORIES.values() for s in cat}
+    ALL_SKILLS = sorted(all_skills_set)
+    ALL_SKILLS_RE = re.compile(
+        r"\b(" + "|".join(re.escape(s) for s in ALL_SKILLS) + r")\b"
+    )
+
+    JOB_TITLE_RE = re.compile(
+        r"\b(" + "|".join(JOB_TITLE_KEYWORDS) + r")\b", re.IGNORECASE
+    )
+
+    ACTION_VERBS_EN = frozenset(_ACTION_VERBS_EN_BASE | set(extra_verbs_en))
+    ACTION_VERBS_FR = frozenset(_ACTION_VERBS_FR_BASE | set(extra_verbs_fr))
+
+    _initialized = True
+
+
+init_lexicons()

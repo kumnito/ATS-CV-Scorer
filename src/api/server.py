@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.core.budget_guard import budget_guard
 from src.core.config import settings
+from src.core.lexicons import init_lexicons
 from src.core.schemas import ATSResponse, RankedJobMatch
 from src.services.claude_feedback import ClaudeBudgetExceeded, ClaudeFeedback
 from src.services.cv_transformer import CVTransformer
@@ -23,6 +24,8 @@ app.add_middleware(
     allow_methods=["POST", "GET"],
     allow_headers=["*"],
 )
+
+init_lexicons()
 
 _cv_transformer = CVTransformer()
 _nlp_pipeline = NLPPipeline()

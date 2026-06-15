@@ -109,8 +109,9 @@ async def find_jobs(
             raise HTTPException(status_code=422, detail="Could not extract text from PDF.")
 
         parsed_cv = _nlp_pipeline.parse_normalized(normalized_cv)
-        return find_matching_jobs(
+        result = find_matching_jobs(
             parsed_cv, _job_search_service, _semantic_scorer, max_results=max_results
         )
+        return result.matches
     finally:
         os.unlink(tmp_path)

@@ -19,5 +19,7 @@ class Settings(BaseSettings):
     adzuna_api_key: str = ""
     adzuna_country: str = "fr"
 
+    jooble_api_key: str = ""
+
 
 settings = Settings()

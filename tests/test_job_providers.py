@@ -2,6 +2,7 @@ import httpx
 
 from src.core.schemas import JobListing
 from src.services.job_providers.adzuna import AdzunaProvider
+from src.services.job_providers.jooble import JoobleProvider, _parse_salary_min
 from src.services.job_providers.orchestrator import JobSearchOrchestrator
 
 _SAMPLE_PAYLOAD = {
@@ -67,6 +68,75 @@ def test_adzuna_provider_check_availability_http_error():
     available, _ = provider.check_availability()
 
     assert available is False
+
+
+_JOOBLE_PAYLOAD = {
+    "totalCount": 1,
+    "jobs": [
+        {
+            "title": "ML Engineer",
+            "location": "Paris, France",
+            "snippet": "Build and ship ML models in production.",
+            "salary": "45000 - 60000 EUR",
+            "company": "Acme Corp",
+            "link": "https://jooble.org/jdp/123",
+            "type": "Full-time",
+        }
+    ],
+}
+
+
+def _client_with_post_payload(payload: dict, status_code: int = 200) -> httpx.Client:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status_code, json=payload)
+
+    return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+def test_jooble_provider_search_maps_jobs_to_job_listings():
+    provider = JoobleProvider(api_key="key", client=_client_with_post_payload(_JOOBLE_PAYLOAD))
+
+    listings = provider.search(query="ML Engineer", location="Paris")
+
+    assert len(listings) == 1
+    listing = listings[0]
+    assert listing.title == "ML Engineer"
+    assert listing.company == "Acme Corp"
+    assert listing.location == "Paris, France"
+    assert listing.description == "Build and ship ML models in production."
+    assert listing.url == "https://jooble.org/jdp/123"
+    assert listing.salary_min == 45000.0
+    assert listing.source == "jooble"
+    assert listing.source_color == "#10b981"
+
+
+def test_jooble_provider_search_returns_empty_list_without_api_key():
+    provider = JoobleProvider(client=_client_with_post_payload(_JOOBLE_PAYLOAD))
+
+    assert provider.search(query="ML Engineer") == []
+
+
+def test_jooble_provider_search_returns_empty_list_without_query():
+    provider = JoobleProvider(api_key="key", client=_client_with_post_payload(_JOOBLE_PAYLOAD))
+
+    assert provider.search(query="   ") == []
+
+
+def test_jooble_provider_search_returns_empty_list_on_http_error():
+    provider = JoobleProvider(api_key="key", client=_client_with_post_payload({}, status_code=500))
+
+    assert provider.search(query="ML Engineer") == []
+
+
+def test_jooble_provider_check_availability_reflects_api_key_presence():
+    assert JoobleProvider(api_key="key").check_availability() == (True, 0.0)
+    assert JoobleProvider(api_key="").check_availability() == (False, 0.0)
+
+
+def test_parse_salary_min_extracts_first_number():
+    assert _parse_salary_min("45000 - 60000 EUR") == 45000.0
+    assert _parse_salary_min("") is None
+    assert _parse_salary_min("Negotiable") is None
 
 
 class _FakeProvider:

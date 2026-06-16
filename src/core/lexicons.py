@@ -29,6 +29,7 @@ SECTION_HEADERS: dict[str, str] = {
     "certifications": r"^(certifications?|certificates?|awards?|achievements?|licenses?|accreditations?|certifications?|diplômes?|distinctions?)",
     "languages": r"^(languages?|spoken languages?|language skills?|langues?)",
     "interests": r"^(interests?|hobbies?|passions?|personal interests?|loisirs?|centres? d'intérêts?|activités? extra-professionnelles?|vie extra-professionnelle)",
+    "contact": r"^(contact|contact information|contact details|personal information|personal details|coordonnées?|informations? personnelles?|informations? de contact)",
 }
 
 # Mutable — extended at import time by _merge_generated() if lexicons_generated.json exists.

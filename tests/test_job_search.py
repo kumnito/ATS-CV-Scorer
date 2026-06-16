@@ -1,6 +1,12 @@
+"""Tests de l'AdzunaProvider — anciennement via JobSearchService (wrapper supprimé Phase G).
+
+La logique testée est identique : AdzunaProvider.search() est l'implémentation
+directe qui était exposée par le wrapper.
+"""
+
 import httpx
 
-from src.services.job_search import JobSearchService
+from src.services.job_providers.adzuna import AdzunaProvider
 
 _SAMPLE_PAYLOAD = {
     "results": [
@@ -33,11 +39,11 @@ def _client_with_payload(payload: dict, status_code: int = 200) -> httpx.Client:
 
 
 def test_search_maps_results_to_job_listings():
-    svc = JobSearchService(
+    provider = AdzunaProvider(
         app_id="id", app_key="key", client=_client_with_payload(_SAMPLE_PAYLOAD)
     )
 
-    listings = svc.search(query="ML Engineer", location="Paris")
+    listings = provider.search(query="ML Engineer", location="Paris")
 
     assert len(listings) == 2
     first = listings[0]
@@ -51,11 +57,11 @@ def test_search_maps_results_to_job_listings():
 
 
 def test_search_handles_missing_optional_fields():
-    svc = JobSearchService(
+    provider = AdzunaProvider(
         app_id="id", app_key="key", client=_client_with_payload(_SAMPLE_PAYLOAD)
     )
 
-    listings = svc.search(query="Data Scientist")
+    listings = provider.search(query="Data Scientist")
 
     second = listings[1]
     assert second.salary_min is None
@@ -64,19 +70,19 @@ def test_search_handles_missing_optional_fields():
 
 
 def test_search_returns_empty_list_without_credentials():
-    svc = JobSearchService(
+    provider = AdzunaProvider(
         app_id="", app_key="", client=_client_with_payload(_SAMPLE_PAYLOAD)
     )
 
-    assert svc.search(query="ML Engineer") == []
+    assert provider.search(query="ML Engineer") == []
 
 
 def test_search_returns_empty_list_without_query():
-    svc = JobSearchService(
+    provider = AdzunaProvider(
         app_id="id", app_key="key", client=_client_with_payload(_SAMPLE_PAYLOAD)
     )
 
-    assert svc.search(query="   ") == []
+    assert provider.search(query="   ") == []
 
 
 def test_search_passes_distance_param_only_when_location_and_distance_given():
@@ -86,15 +92,15 @@ def test_search_passes_distance_param_only_when_location_and_distance_given():
         captured.append(request)
         return httpx.Response(200, json=_SAMPLE_PAYLOAD)
 
-    svc = JobSearchService(
+    provider = AdzunaProvider(
         app_id="id",
         app_key="key",
         client=httpx.Client(transport=httpx.MockTransport(handler)),
     )
 
-    svc.search(query="ML Engineer", location="Croix", distance=30)
-    svc.search(query="ML Engineer", location="Hauts-de-France")
-    svc.search(query="ML Engineer")
+    provider.search(query="ML Engineer", location="Croix", distance=30)
+    provider.search(query="ML Engineer", location="Hauts-de-France")
+    provider.search(query="ML Engineer")
 
     assert captured[0].url.params["where"] == "Croix"
     assert captured[0].url.params["distance"] == "30"
@@ -105,8 +111,8 @@ def test_search_passes_distance_param_only_when_location_and_distance_given():
 
 
 def test_search_returns_empty_list_on_http_error():
-    svc = JobSearchService(
+    provider = AdzunaProvider(
         app_id="id", app_key="key", client=_client_with_payload({}, status_code=500)
     )
 
-    assert svc.search(query="ML Engineer") == []
+    assert provider.search(query="ML Engineer") == []

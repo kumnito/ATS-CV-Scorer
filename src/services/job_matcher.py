@@ -1,13 +1,12 @@
 import re
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 
 from src.core.lexicons import JOB_TITLE_RE, JOB_TITLE_SYNONYMS
 from src.core.schemas import NormalizedCV, RankedJobMatch
-from src.services.job_search import JobSearchService
 from src.services.semantic_scorer import SemanticScorer
 
 # Seniority qualifiers narrow Adzuna's `what` search too aggressively
@@ -123,7 +122,7 @@ def _build_queries(parsed_cv: NormalizedCV) -> list[str]:
 
 def find_matching_jobs(
     parsed_cv: NormalizedCV,
-    job_search: JobSearchService,
+    job_search: Any,
     scorer: SemanticScorer,
     max_results: int = 20,
     region: str | None = None,

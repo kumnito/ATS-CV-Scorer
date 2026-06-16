@@ -11,13 +11,17 @@ from src.core.config import settings
 from src.core.lexicons import init_lexicons
 from src.core.schemas import ATSResponse, RankedJobMatch
 from src.services.claude_feedback import ClaudeBudgetExceeded, ClaudeFeedback
+from src.services.cv_quality_scorer import CVQualityScorer
 from src.services.cv_transformer import CVTransformer
 from src.services.job_matcher import find_matching_jobs
-from src.services.job_search import JobSearchService
+from src.services.job_providers.adzuna import AdzunaProvider
+from src.services.job_providers.jooble import JoobleProvider
+from src.services.job_providers.orchestrator import JobSearchOrchestrator
 from src.services.nlp_pipeline import NLPPipeline
+from src.services.sector_detector import SectorDetector
 from src.services.semantic_scorer import SemanticScorer
 
-app = FastAPI(title="ATS CV Scorer API", version="0.2.0")
+app = FastAPI(title="ATS CV Scorer API", version="0.3.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://voroman-ats-cv-scorer.hf.space"],
@@ -30,11 +34,16 @@ init_lexicons()
 _cv_transformer = CVTransformer()
 _nlp_pipeline = NLPPipeline()
 _semantic_scorer = SemanticScorer()
-_job_search_service = JobSearchService(
-    app_id=settings.adzuna_id,
-    app_key=settings.adzuna_api_key,
-    country=settings.adzuna_country,
-)
+_sector_detector = SectorDetector()
+_cv_quality_scorer = CVQualityScorer()
+_orchestrator = JobSearchOrchestrator(providers=[
+    AdzunaProvider(
+        app_id=settings.adzuna_id,
+        app_key=settings.adzuna_api_key,
+        country=settings.adzuna_country,
+    ),
+    JoobleProvider(api_key=settings.jooble_api_key),
+])
 
 
 @app.get("/health")
@@ -69,8 +78,6 @@ async def _tmp_pdf(cv_file: UploadFile):
         os.unlink(tmp_path)
 
 
-# Kept for external API integration (ATS plugins, HR tools)
-# Not exposed in Gradio UI — available via REST only
 @app.post("/score", response_model=ATSResponse)
 async def score_cv(
     cv_file: UploadFile = File(..., description="PDF résumé/CV"),
@@ -85,13 +92,19 @@ async def score_cv(
             raise HTTPException(status_code=422, detail="Could not extract text from PDF.")
 
         parsed_cv = _nlp_pipeline.parse_normalized(normalized_cv)
+        sector_result = _sector_detector.detect(parsed_cv)
+        quality_report = _cv_quality_scorer.score(parsed_cv, sector_result=sector_result)
         scoring_result = _semantic_scorer.score(parsed_cv, job_description)
 
         if include_feedback and settings.anthropic_api_key:
             feedback_svc = ClaudeFeedback()
             try:
                 scoring_result.feedback = feedback_svc.generate_feedback(
-                    parsed_cv, job_description, scoring_result
+                    parsed_cv,
+                    job_description,
+                    scoring_result,
+                    sector_result=sector_result,
+                    criteria_results=quality_report.criteria_results,
                 )
             except ClaudeBudgetExceeded as exc:
                 raise HTTPException(status_code=429, detail=str(exc)) from exc
@@ -100,6 +113,10 @@ async def score_cv(
             scoring_result=scoring_result,
             parsed_cv=parsed_cv,
             processing_time_seconds=round(time.perf_counter() - start, 3),
+            detected_sector=sector_result.sector,
+            detected_profile=sector_result.profile_id,
+            detection_confidence=sector_result.confidence,
+            criteria_results=quality_report.criteria_results,
         )
 
 
@@ -117,6 +134,6 @@ async def find_jobs(
 
         parsed_cv = _nlp_pipeline.parse_normalized(normalized_cv)
         result = find_matching_jobs(
-            parsed_cv, _job_search_service, _semantic_scorer, max_results=max_results
+            parsed_cv, _orchestrator, _semantic_scorer, max_results=max_results
         )
         return result.matches

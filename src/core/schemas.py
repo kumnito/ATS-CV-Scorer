@@ -170,6 +170,10 @@ class ATSResponse(BaseModel):
     scoring_result: ScoringResult
     parsed_cv: NormalizedCV
     processing_time_seconds: float
+    detected_sector: Optional[str] = None
+    detected_profile: Optional[str] = None
+    detection_confidence: float = 0.0
+    criteria_results: list[CriterionResult] = Field(default_factory=list)
 
 
 class JobListing(BaseModel):

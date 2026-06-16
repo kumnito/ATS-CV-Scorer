@@ -29,19 +29,101 @@ _TARGET_OCCUPATIONS: list[str] = [
     "software developer",
     "data analyst",
     "mlops engineer",
+    "devops engineer",
+    "qa engineer",
+    "product manager",
+    "ux designer",
+    "cybersecurity analyst",
     # Vente / commerce
     "sales representative",
     "commercial",
+    "store manager",
+    "buyer",
     # RH
     "human resources manager",
     "recruitment consultant",
     # Ingénierie généraliste
     "civil engineer",
     "mechanical engineer",
+    # Santé
+    "nurse",
+    "nursing assistant",
+    "social worker",
+    "pharmacist",
+    "physiotherapist",
+    "physician",
     # Santé / fitness
     "fitness trainer",
     "healthcare worker",
+    # BTP & Construction
+    "electrician",
+    "plumber",
+    "carpenter",
+    # Transport & logistique
+    "truck driver",
+    "warehouse worker",
+    "logistics manager",
+    "freight forwarder",
+    # Hôtellerie & restauration
+    "cook",
+    "waiter",
+    "restaurant manager",
+    "hotel receptionist",
+    # Finance & comptabilité
+    "accountant",
+    "financial analyst",
+    "payroll administrator",
+    "auditor",
+    # Éducation
+    "teacher",
+    "trainer",
+    # Sécurité
+    "security guard",
+    # Marketing & communication
+    "marketing specialist",
+    "community manager",
+    "graphic designer",
+    # Juridique
+    "lawyer",
+    # Immobilier
+    "real estate agent",
+    # Artisanat
+    "baker",
+    "butcher",
 ]
+
+# Mapping sector_key → ESCO occupation query terms, used by build_sector_keywords().
+_SECTOR_ESCO_QUERIES: dict[str, list[str]] = {
+    "industrie_manufacturiere": [
+        "production operator", "maintenance technician", "quality controller", "welder",
+    ],
+    "btp": ["construction worker", "electrician", "plumber", "carpenter", "civil engineer"],
+    "agroalimentaire": ["food production operator", "food quality technician"],
+    "energie_environnement": ["wind turbine technician", "water treatment operator"],
+    "commerce_distribution": ["sales representative", "cashier", "store manager", "buyer"],
+    "transport_logistique": [
+        "truck driver", "warehouse worker", "logistics manager", "freight forwarder",
+    ],
+    "hotellerie_restauration": ["cook", "waiter", "restaurant manager", "hotel receptionist"],
+    "sante_social": [
+        "nurse", "nursing assistant", "social worker", "pharmacist", "physiotherapist",
+    ],
+    "education_formation": ["teacher", "trainer"],
+    "securite": ["security guard"],
+    "banque_assurance": ["bank advisor", "insurance agent", "financial advisor"],
+    "finance_comptabilite": [
+        "accountant", "financial analyst", "payroll administrator", "auditor",
+    ],
+    "rh_recrutement": ["human resources manager", "recruitment consultant"],
+    "juridique_administratif": ["lawyer", "legal secretary"],
+    "marketing_communication": ["marketing specialist", "community manager", "graphic designer"],
+    "informatique_digital": [
+        "software developer", "devops engineer", "data scientist",
+        "machine learning engineer", "cybersecurity analyst", "ux designer",
+    ],
+    "immobilier": ["real estate agent"],
+    "artisanat": ["baker", "butcher"],
+}
 
 # Words so generic that they cannot disambiguate an occupation query from its
 # ESCO result.  Used by _occupation_matches_query to detect bad matches like
@@ -374,6 +456,43 @@ class LexiconBuilder:
             "action_verbs_en": [],
             "action_verbs_fr": [],
         }
+
+    # ------------------------------------------------------------------
+    # Sector keyword builder (called by make update-lexicons --sectors)
+    # ------------------------------------------------------------------
+
+    def build_sector_keywords(self, sector_id: str) -> list[str]:
+        """Fetch ESCO essential skills for all occupations mapped to sector_id.
+
+        Returns a deduplicated list of normalized skill strings.
+        Never called during tests — only via make update-lexicons.
+        """
+        queries = _SECTOR_ESCO_QUERIES.get(sector_id, [])
+        if not queries:
+            logger.warning("build_sector_keywords: no ESCO queries for sector %r", sector_id)
+            return []
+
+        keywords: list[str] = []
+        seen: set[str] = set()
+
+        with httpx.Client(base_url=_ESCO_BASE, timeout=self._timeout) as client:
+            for query in queries:
+                occ_uri, _ = self._esco_best_occupation(client, query)
+                if not occ_uri:
+                    logger.debug("build_sector_keywords: no ESCO match for %r", query)
+                    continue
+                occ_data = self._esco_get_occupation(client, occ_uri, "en")
+                if not occ_data:
+                    continue
+                for link in occ_data.get("_links", {}).get("hasEssentialSkill", []):
+                    raw = link.get("title", "")
+                    normalized = _normalize_skill(raw)
+                    if normalized and normalized not in seen:
+                        keywords.append(normalized)
+                        seen.add(normalized)
+
+        logger.info("build_sector_keywords(%r): %d keywords", sector_id, len(keywords))
+        return keywords
 
 
 def print_stats(data: dict) -> None:

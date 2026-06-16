@@ -14,195 +14,293 @@ short_description: Score your CV, find matching jobs, get AI feedback
 
 # ATS CV Scorer
 
-Portfolio project — ML Engineer track.
+Portfolio project — ML Engineer track (DataScientest).
 
 🔗 **Live demo**: [voroman/ats-cv-scorer](https://huggingface.co/spaces/voroman/ats-cv-scorer)
 
-Upload your CV (PDF) only. The pipeline extracts your **job title**,
-**skills**, **location** and **sector**, runs an immediate **CV quality
-report** (ATS readability + profile strength + prioritized
-recommendations), then automatically searches matching job listings across
-**multiple sources** (Adzuna, Jooble, France Travail), scores each one
-against your profile with a semantic similarity engine, and ranks them. You
-can then request a **personalized Claude AI analysis per listing, on
-demand** — no AI call is triggered until you click "Analyser cette offre".
+Upload your CV (PDF) only. The pipeline extracts your profile, runs an
+adaptive **ATS quality report** calibrated to your detected job sector,
+searches matching listings across **3 sources**, and delivers a
+**sector-aware Claude AI analysis** on demand per listing.
+
+---
 
 ## Architecture
 
+```
+PDF
+ │
+ ▼
+┌─────────────────────────────────────────────────────────────┐
+│  CVTransformer — 3-level cascade                            │
+│                                                             │
+│  Level 1: pdfplumber (layout-aware)                         │
+│    → detects 1-col / 2-col, reconstructs reading order      │
+│    → confidence = min(1.0, word_count / 450)                │
+│    → confidence ≥ 0.85 → stop                               │
+│                                                             │
+│  Level 2: Tesseract OCR                                     │
+│    → only replaces pdfplumber if ocr_words > pdf_words×1.1  │
+│       AND ocr_words ≥ 150                                   │
+│    → confidence still < 0.85 → Level 3                      │
+│                                                             │
+│  Level 3: Vision LLM (Claude)                               │
+│    → wins on structural richness score, not word count      │
+│    → layout always taken from pdfplumber (real data)        │
+│    → requires ANTHROPIC_API_KEY + VISION_LLM_ENABLED=true   │
+└─────────────────────────┬───────────────────────────────────┘
+                          │ NormalizedCV
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│  NLPPipeline                                                │
+│    → job_title   (regex JOB_TITLE_KEYWORDS, 200+ titles)    │
+│    → location    (postal code regex → filtered NER fallback) │
+│    → postal_code (enables precise Adzuna geocoding)         │
+│    → skills_flat (regex ALL_SKILLS_RE on raw_text)          │
+│    → sector      (SECTOR_KEYWORDS scan on experience text)  │
+└─────────────────────────┬───────────────────────────────────┘
+                          │ NormalizedCV (enriched)
+           ┌──────────────┴──────────────┐
+           ▼                             ▼
+┌──────────────────────┐    ┌────────────────────────────────────┐
+│  SectorDetector      │    │  JobSearchOrchestrator             │
+│                      │    │                                    │
+│  134 SectorProfiles  │    │  Adzuna  — geo + multi-query       │
+│  9 sectors           │    │  Jooble  — international           │
+│  MiniLM cosine sim   │    │  France Travail — OAuth2, dept.    │
+│                      │    │                                    │
+│  score =             │    │  3 query variants per provider     │
+│   0.4 × title_sim    │    │  (base title + synonym + ×sector)  │
+│   0.35 × skills_kw   │    │  Parallel fan-out, URL dedup,      │
+│   0.25 × exp_kw      │    │  graceful degradation              │
+│                      │    └──────────────┬─────────────────────┘
+│  n-gram windowing    │                   │ list[JobListing]
+│  (noisy job_title)   │                   ▼
+│  threshold: 0.30     │    ┌────────────────────────────────────┐
+└──────────┬───────────┘    │  SemanticScorer (MiniLM)          │
+           │ SectorDetectionResult  │  score per listing vs. CV         │
+           ▼                │  keyword match + semantic sim      │
+┌──────────────────────┐    │  + structure completeness         │
+│  CriteriaBuilder     │    └──────────────┬─────────────────────┘
+│  + CVQualityScorer   │                   │ list[RankedJobMatch]
+│                      │                   ▼
+│  per-profile criteria│    ┌────────────────────────────────────┐
+│  (weight 0-100, req) │    │  ClaudeFeedback (on demand)       │
+│                      │    │                                    │
+│  ATSReadability      │    │  sector-aware prompt:             │
+│  ProfileStrength     │    │  - profil détecté + confiance     │
+│  Recommendations     │    │  - critères obligatoires KO       │
+│  CriterionResult[]   │    │  - critères recommandés KO        │
+└──────────┬───────────┘    │  3-part output: POINTS FORTS /   │
+           │                │  POINTS À AMÉLIORER /             │
+           ▼                │  CONSEIL PRIORITAIRE              │
+  ┌────────────────┐        └───────────────────────────────────┘
+  │ Onglet 1       │
+  │ Analyse du CV  │        ┌───────────────────────────────────┐
+  │                │        │ Onglet 2                          │
+  │ · qualité ATS  │        │ Recherche d'offres                │
+  │ · profil       │        │                                   │
+  │ · secteur      │        │ · source status cards (real-time) │
+  │ · critères     │        │ · ranked job cards (score+source) │
+  │ · timeline     │        │ · source/salary filters           │
+  │ · badges skills│        │ · Claude feedback per card        │
+  └────────────────┘        └───────────────────────────────────┘
+```
+
+### Flux Mermaid
+
 ```mermaid
 flowchart TD
-    A["CV PDF upload"] --> B{"CVTransformer<br/>cascade extraction"}
-    B -->|"confidence >= 0.85"| C["pdfplumber<br/>layout-aware"]
-    B -->|"confidence < 0.85"| D["OCR<br/>Tesseract"]
-    D -->|"confidence < 0.85<br/>VISION_LLM_ENABLED + quota"| E["Vision LLM<br/>Claude"]
+    A["CV PDF upload"] --> B{"CVTransformer\ncascade 3 niveaux"}
+    B -->|"confidence ≥ 0.85"| C["pdfplumber\nlayout-aware"]
+    B -->|"confidence < 0.85"| D["OCR Tesseract"]
+    D -->|"confidence < 0.85\n+ VISION_LLM_ENABLED"| E["Vision LLM Claude"]
     C --> F["NormalizedCV"]
     D --> F
     E --> F
 
-    F --> G["NLPPipeline<br/>job title, location,<br/>sector, skills"]
-    F --> H["CVQualityScorer<br/>ATS readability +<br/>profile strength +<br/>recommendations"]
+    F --> G["NLPPipeline\ntitle · location · skills · sector"]
+    G --> SD["SectorDetector\n134 profils · 9 secteurs\nMiniLM n-gram"]
+    SD --> CB["CriteriaBuilder\n→ CVQualityScorer\ncritères adaptatifs"]
+    CB --> R1["ATSReadability\nProfileStrength\nRecommendations"]
 
-    G --> I["JobSearchOrchestrator<br/>Adzuna · Jooble · France Travail"]
-    I --> J["Semantic scoring<br/>& ranking"]
-    J --> K["On-demand Claude<br/>feedback per listing"]
+    G --> I["JobSearchOrchestrator\nAdzuna · Jooble · France Travail"]
+    I --> J["SemanticScorer\nranking par listing"]
+    J --> K["ClaudeFeedback\nprompt sectoriel\nà la demande"]
 
-    H -.shown immediately,<br/>no API call.-> Tab1["Tab: Analyse du CV"]
-    J -.Adzuna always on,<br/>Jooble/FT if configured.-> Tab2["Tab: Recherche d'offres"]
-    K -.requires Anthropic key,<br/>session-rate-limited.-> Tab2
+    R1 -.sans appel API.-> Tab1["Onglet : Analyse du CV"]
+    J -.filtré · ranked.-> Tab2["Onglet : Recherche d'offres"]
+    K -.rate-limited session.-> Tab2
 ```
+
+---
 
 ## Stack
 
-| Layer | Tech |
+| Couche | Technologie |
 |---|---|
-| PDF extraction | pdfplumber (layout-aware) → Tesseract OCR → Vision LLM (Claude), 3-level cascade |
-| NLP | spaCy `en_core_web_sm` |
-| Semantic scoring | `sentence-transformers` (all-MiniLM-L6-v2) |
-| CV quality scoring | custom rule-based scorer — ATS readability, profile strength, prioritized recommendations |
-| AI feedback | Anthropic Claude API (responses in French, prompt caching) |
-| Job search | Multi-source orchestrator (`httpx`) — Adzuna, Jooble, France Travail (OAuth2) |
-| API | FastAPI |
-| UI | Gradio (two tabs, custom "Tech Dashboard" theme) |
-| Deployment | Hugging Face Spaces (Docker, Python 3.12) |
+| Extraction PDF | pdfplumber (layout-aware) → Tesseract OCR → Vision LLM, cascade 3 niveaux |
+| NLP | spaCy `en_core_web_sm` + regex (lexiques FR/EN) |
+| Scoring sémantique | `sentence-transformers` `all-MiniLM-L6-v2` |
+| Détection secteur | MiniLM cosine sim · 134 profils · 9 secteurs · n-gram title matching |
+| Scoring ATS adaptatif | `CVQualityScorer` — critères pondérés par profil sectoriel |
+| Feedback IA | Anthropic Claude (`claude-sonnet-4-6`) · prompt sectoriel · réponse FR |
+| Recherche d'offres | `JobSearchOrchestrator` — Adzuna, Jooble, France Travail (OAuth2) |
+| API REST | FastAPI `v0.3.0` — `/score`, `/find-jobs`, `/health` |
+| UI | Gradio 4.44 — 2 onglets, thème Tech Dashboard custom |
+| Déploiement | Hugging Face Spaces (Docker, Python 3.12) |
 
-## How it works
+---
 
-### Tab 1 — "📋 Analyse du CV"
+## Pipeline détaillé
 
-Triggered as soon as a CV is uploaded, no external API calls required.
+### Onglet 1 — Analyse du CV
 
-1. **Extraction** — `CVTransformer` runs a 3-level cascade:
-   - **Level 1**: pdfplumber's character-level positional data detects the
-     layout (single / two-column), reconstructs reading order, and produces
-     a structured `NormalizedCV` (header, skills, experience, education,
-     projects). If extraction confidence ≥ 0.85, this result is used
-     directly.
-   - **Level 2**: if confidence < 0.85, Tesseract OCR is run; it replaces
-     the pdfplumber result only if it extracts significantly more words.
-   - **Level 3**: if confidence is still < 0.85 **and** `VISION_LLM_ENABLED`
-     is set **and** the per-session Vision quota isn't exhausted, Claude's
-     vision capability re-reads the PDF as an image and is used if it
-     produces a structurally richer result.
-   - The detected layout is always taken from the real pdfplumber data,
-     regardless of which level "wins".
-2. **CV quality report** — `CVQualityScorer` produces three independent
-   sections, displayed immediately:
-   - **ATS readability**: layout risk, sections found/missing, extraction
-     method, machine-readability check.
-   - **Profile strength**: a 0-100 score (`Solide` / `Correct` / `À
-     renforcer`) based on word count, skill count, experience count,
-     summary, dates, action verbs/nouns, metrics and projects, with
-     concrete strengths/improvements.
-   - **Recommendations**: prioritized (Fort / Moyen / Faible) actionable
-     fixes, ATS-blockers first.
-   - Plus a career timeline (total experience, start year, most recent
-     role, education years, gaps > 12 months).
-3. **NLP** — spaCy detects job title, location, sector and skills from the
-   header (postal address pattern first, filtered NER as fallback —
-   `en_core_web_sm` is an English model and unreliable on French text).
+Déclenché à l'upload. Aucun appel réseau externe.
 
-### Tab 2 — "🔍 Recherche d'offres"
+**1. Extraction — CVTransformer**
 
-Reuses the CV already parsed in Tab 1 (no re-processing).
+Cascade de confiance (confidence = `min(1.0, word_count / 450)`) :
 
-4. **Source status** — on tab load, availability of the three job
-   providers (Adzuna, Jooble, France Travail) is checked in parallel and
-   shown as status cards (✅ available + latency / ⏳ checking / ❌
-   unavailable or missing credentials). Each source can be toggled on/off;
-   Adzuna is on by default, the others default to on only if their
-   credentials are configured.
-5. **Job search** — the `JobSearchOrchestrator` queries every active
-   provider with multiple query variants (base title, synonyms, title ×
-   sector), merges and deduplicates results by URL across sources. The job
-   title can be edited before searching. Search is scoped to the detected
-   location/postal code (30 km radius) or to a manually-selected French
-   region, which always takes priority.
-6. **Scoring & filtering** — each listing is scored against your CV with
-   the semantic engine, filtered by a minimum-relevance threshold, and
-   ranked. A stats line shows the per-source counts and the number of
-   duplicates removed. Results can be further filtered by source or by
-   "known salary only", without re-running the search.
-7. **AI feedback** — click "Analyser cette offre" on any listing to get a
-   personalized, French-language Claude analysis (skill gaps, ATS keyword
-   suggestions, structural improvements).
+- **Niveau 1 pdfplumber** : lit les positions caractère (`x0`, `top`, `size`, `fontname`), détecte le layout (gap central en x0 → 1 ou 2 colonnes), reconstruit l'ordre de lecture colonne gauche → droite, parse sections, header structuré (nom, titre, email, tél., localisation, code postal). Confiance ≥ 0.85 → fin.
+- **Niveau 2 OCR Tesseract** : remplace pdfplumber seulement si `ocr_words > pdf_words × 1.10 AND ocr_words ≥ 150`.
+- **Niveau 3 Vision LLM** : déclenché si confiance encore < 0.85, `ANTHROPIC_API_KEY` présent et quota session non épuisé. Gagne sur richesse structurelle (expériences, formations, projets, email, titre) — pas sur le word_count. Le layout est toujours pris sur les données pdfplumber réelles.
 
-## Score breakdown (CV ↔ job listing)
+**2. NLP — NLPPipeline**
 
-| Component | Weight |
-|---|---|
-| Keyword match | 40 % |
-| Semantic similarity | 35 % |
-| CV structure completeness | 25 % |
+- `job_title` : regex `JOB_TITLE_KEYWORDS` (200+ métiers FR/EN) sur les premières lignes du header.
+- `location` : code postal FR 5 chiffres + ville (regex `POSTAL_CODE_CITY_RE`) → fallback NER filtré avec `LOCATION_BLOCKLIST` (langues, mots génériques).
+- `skills_flat` : regex pré-compilée `ALL_SKILLS_RE` sur `raw_text` (union des lexiques catégorisés ML / MLOps / Cloud / Data / Langages / Commerce / Autres).
+- `sector` : scan `SECTOR_KEYWORDS` sur le texte des expériences (titre + company + bullets).
+
+**3. Détection sectorielle — SectorDetector**
+
+Score composite par profil :
+
+```
+score = 0.40 × title_sim + 0.35 × skills_kw + 0.25 × exp_kw
+```
+
+- `title_sim` : fenêtres n-gram (2–4 mots) sur `job_title` bruité → cosine sim max avec matrix d'aliases MiniLM précalculée.
+- `skills_kw` : proportion de `detection_keywords` du profil trouvés dans `skills_flat + sections["skills"]`.
+- `exp_kw` : proportion trouvée dans bullets d'expérience + `sections["experience"]`.
+- Seuil de confiance : 0.30. En-dessous → profil générique `non_detecte`.
+- Correction manuelle disponible via dropdown UI (override → `SectorDetector.make_forced_result()`).
+
+**4. Scoring ATS adaptatif — CriteriaBuilder + CVQualityScorer**
+
+Chaque `SectorProfile` définit une liste de `Criterion` (id, label, poids, required, fonction d'évaluation). `CriteriaBuilder` instancie les critères du profil détecté ; `CVQualityScorer` les évalue (score binaire 0/100 par critère, `weighted_score = score × weight / 100`) et produit :
+
+- `ATSReadability` — layout, sections trouvées/manquantes, méthode d'extraction, machine-readable.
+- `ProfileStrength` — score 0-100 (`Solide` ≥ 75 / `Correct` ≥ 50 / `À renforcer`), forces et améliorations.
+- `list[Recommendation]` — ordonnées par priorité (1 Fort ATS-bloquant / 2 Moyen matching / 3 Faible polish).
+- Timeline carrière — années d'expérience, année début, dernier poste, trous > 12 mois.
+
+### Onglet 2 — Recherche d'offres
+
+Réutilise le CV déjà parsé. Pas de re-traitement PDF.
+
+**5. Sources d'offres — JobSearchOrchestrator**
+
+| Provider | Couverture | Auth |
+|---|---|---|
+| **Adzuna** | FR natif | `ADZUNA_ID` + `ADZUNA_API_KEY` |
+| **Jooble** | International | `JOOBLE_API_KEY` |
+| **France Travail** | Pôle Emploi officiel | OAuth2 client credentials (`FRANCE_TRAVAIL_CLIENT_ID` / `_SECRET`) |
+
+- Disponibilité vérifiée en parallèle (`ThreadPoolExecutor`) au chargement de l'onglet.
+- 3 variantes de requête par source : titre de base + synonyme (`JOB_TITLE_SYNONYMS`) + titre × secteur.
+- Géocodage : `"59170 Croix"` (code postal + ville) → Adzuna précis. Région manuelle prioritaire sur la localisation CV.
+- Déduplication par URL, seuil qualité `_MIN_SCORE_THRESHOLD = 25.0`, signal `few_results` si < 3 offres.
+
+**6. Scoring sémantique — SemanticScorer**
+
+`overall_score = 0.40 × keyword_match + 0.35 × semantic_similarity + 0.25 × structure_completeness`
+
+**7. Feedback Claude — ClaudeFeedback**
+
+Prompt enrichi avec le contexte sectoriel :
+- Profil détecté, confiance, critères obligatoires non satisfaits (label + evidence), critères recommandés non satisfaits.
+- Instructions : 3 parties structurées (POINTS FORTS / POINTS À AMÉLIORER / CONSEIL PRIORITAIRE), max 250 mots, FR.
+- Fallback générique si `sector_result=None`.
+
+---
+
+## API REST
+
+`FastAPI v0.3.0` — démarrage : `make dev` → `http://localhost:8000/docs`
+
+### `GET /health`
+
+```json
+{"status": "ok", "claude_budget_remaining": 297}
+```
+
+### `POST /score`
+
+Champs form-data : `cv_file` (PDF), `job_description` (str), `include_feedback` (bool, défaut false).
+
+Réponse `ATSResponse` :
+
+```json
+{
+  "scoring_result": {"overall_score": 68.4, "breakdown": {...}, "missing_keywords": [...], "feedback": null},
+  "parsed_cv": {"job_title": "Data Scientist", "skills_flat": [...], ...},
+  "processing_time_seconds": 1.243,
+  "detected_sector": "Informatique & Digital",
+  "detected_profile": "data_scientist",
+  "detection_confidence": 0.47,
+  "criteria_results": [{"criterion_id": "eval_experience", "score": 100, "weighted_score": 20.0, ...}]
+}
+```
+
+### `POST /find-jobs`
+
+Champs : `cv_file` (PDF), `max_results` (int, défaut 20).  
+Réponse : `list[RankedJobMatch]` (job + scoring_result, triés par score décroissant).
+
+---
+
+## Protections budget (démo live)
+
+- **Session Vision LLM** : max 3 appels par session Gradio.
+- **Session feedback Claude** : max 5 appels par session Gradio.
+- **`VISION_LLM_ENABLED`** : désactivé par défaut (niveau 3 cascade off).
+- **`CLAUDE_CALLS_LIMIT`** : quota global processus — une fois épuisé, le feedback IA est silencieusement désactivé sans casser l'extraction ni la recherche.
+
+---
 
 ## UI — Tech Dashboard
 
-The Gradio interface uses a custom `gr.themes.Base` theme (indigo/slate,
-Inter + JetBrains Mono) and injected CSS for a data-dashboard look:
+Thème custom `gr.themes.Base` (indigo/slate, Inter + JetBrains Mono) + CSS injecté :
 
-- **Metric cards** — 4 horizontal cards (ATS readability, profile score,
-  keyword density, experience) plus an extraction-method badge (✅ native /
-  ⚠️ OCR / 🤖 Vision AI with confidence %), generated from `CVQualityReport`.
-- **HTML progress bars** — the profile-strength score is rendered as a
-  colored bar (green/amber/red by threshold) instead of ASCII blocks.
-- **Colored job scores** — each job listing shows its match score in large
-  type, colored green (≥70), amber (≥50) or red (<50).
-- **Skill badges** — detected skills are grouped by category (ML / MLOps /
-  Cloud / Data / …) and rendered as small pill badges instead of a flat list.
-- **Career timeline** — an HTML timeline with colored dots (green =
-  experience, indigo = education, amber = career gap) and duration badges.
+- **Metric cards** — 4 cards horizontales (Lisibilité ATS, Score profil, Mots-clés, Expérience) + badge méthode extraction.
+- **Secteur détecté** — card avec profil, confiance, badges alternatives, dropdown correction manuelle.
+- **Critères adaptatifs** — grille des critères du profil détecté (✅ / ❌, poids, evidence).
+- **Skill badges** — compétences groupées par catégorie (ML / MLOps / Cloud / Data / Langages / Commerce).
+- **Timeline HTML** — dots colorés (vert expérience, indigo formation, amber trou de carrière).
+- **Job cards** — score en grand coloré par seuil (≥70 vert / ≥50 amber / <50 rouge) + pill source colorée.
+- CSS dark mode : variables Gradio natives (`--body-text-color`, `--background-fill-*`, `--border-color-*`).
 
-All colors/backgrounds use Gradio's native CSS variables
-(`--body-text-color`, `--background-fill-*`, `--border-color-*`), so the
-dashboard remains readable in both light and dark mode.
+---
 
-## Multi-source job search
-
-Job listings are fetched through a `JobProvider` interface
-(`src/services/job_providers/`) and merged by a `JobSearchOrchestrator`:
-
-| Provider | Coverage | Auth |
-|---|---|---|
-| **Adzuna** | FR native | API ID + key |
-| **Jooble** | International | API key |
-| **France Travail** | Official FR job board | OAuth2 client credentials (thread-safe token cache) |
-
-- `check_availability()` runs for all providers in parallel (thread pool) on
-  tab load, so the UI shows real-time status without slowing down searches.
-- `search()` runs per-provider with graceful degradation: if a provider is
-  unavailable, missing credentials, or raises an error, it's skipped and the
-  others still return results — Adzuna alone is enough to keep the feature
-  working.
-- Results are merged and deduplicated by URL, then scored and ranked
-  together. Each listing carries its source (colored pill: Adzuna indigo,
-  Jooble green, France Travail blue) for traceability.
-
-## API budget protections (demo deployment)
-
-The live demo runs on a rate-limited `ANTHROPIC_API_KEY`:
-
-- **Session limits**: max 3 Vision LLM calls and max 5 Claude feedback calls
-  per Gradio session — beyond that, a message invites you to clone the
-  project and use your own key.
-- **`VISION_LLM_ENABLED`**: off by default (cascade level 3 disabled) —
-  must be explicitly set to `true` to enable Vision LLM fallback.
-- **Global call quota** (`CLAUDE_CALLS_LIMIT`): once the process-wide Claude
-  call budget is exhausted, AI feedback is silently disabled
-  ("Service IA temporairement indisponible") while PDF extraction, semantic
-  scoring and Adzuna search remain fully available.
-
-## Local setup
+## Installation locale
 
 ```bash
-cp .env.example .env      # add ANTHROPIC_API_KEY, ADZUNA_ID / ADZUNA_API_KEY,
-                           # and optionally JOOBLE_API_KEY,
-                           # FRANCE_TRAVAIL_CLIENT_ID / FRANCE_TRAVAIL_CLIENT_SECRET
-make install               # runtime deps
-make install-dev           # + pytest, fpdf2, reportlab (for tests/benchmark)
-make run                    # Gradio UI → http://localhost:7860
-make dev                    # FastAPI  → http://localhost:8000/docs
-make test
+cp .env.example .env
+# Renseigner dans .env :
+# ANTHROPIC_API_KEY, ADZUNA_ID, ADZUNA_API_KEY
+# (optionnel) JOOBLE_API_KEY
+# (optionnel) FRANCE_TRAVAIL_CLIENT_ID, FRANCE_TRAVAIL_CLIENT_SECRET
+# (optionnel) VISION_LLM_ENABLED=true
+
+make install        # dépendances runtime
+make install-dev    # + pytest, fpdf2, reportlab (tests + benchmark)
+make run            # UI Gradio → http://localhost:7860
+make dev            # API FastAPI → http://localhost:8000/docs
+make test           # 374 tests, 10 skippés (PDFs privés)
+make benchmark-sectoriel  # rapport CSV détection × scoring par CV
 ```
 
-OCR (cascade level 2) requires system packages: `tesseract-ocr`,
-`tesseract-ocr-fra`, `poppler-utils` (see `packages.txt`, pre-installed on
-the HF Spaces image).
+OCR (niveau 2) requiert : `tesseract-ocr`, `tesseract-ocr-fra`, `poppler-utils`
+(pré-installés sur l'image HF Spaces via `packages.txt`).

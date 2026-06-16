@@ -11,8 +11,9 @@ import gradio_client.utils as _gradio_client_utils
 from src.core.budget_guard import budget_guard
 from src.core.config import settings
 from src.core.lexicons import init_lexicons
-from src.core.schemas import CVQualityReport, NormalizedCV
+from src.core.schemas import CVQualityReport, CriterionResult, NormalizedCV
 from src.services.claude_feedback import ClaudeBudgetExceeded, ClaudeFeedback, ClaudeServiceError
+from src.services.criteria_evaluator import evaluate_criteria
 from src.services.cv_quality_scorer import CVQualityScorer
 from src.services.cv_transformer import CVTransformer
 from src.services.job_matcher import FRANCE_REGIONS, find_matching_jobs
@@ -21,8 +22,9 @@ from src.services.job_providers.france_travail import FranceTravailProvider
 from src.services.job_providers.jooble import JoobleProvider
 from src.services.job_providers.orchestrator import JobSearchOrchestrator
 from src.services.nlp_pipeline import NLPPipeline
-from src.services.sector_detector import SectorDetector
+from src.services.sector_detector import SectorDetectionResult, SectorDetector
 from src.services.semantic_scorer import SemanticScorer
+from src.core.sector_registry import ALL_PROFILES, PROFILE_BY_SECTOR, SECTOR_DISPLAY_NAMES
 
 
 def _patch_gradio_client_bool_schema() -> None:
@@ -234,6 +236,90 @@ CUSTOM_CSS = """
     vertical-align: middle;
 }
 
+/* Sector detection card */
+.sector-card {
+    border: 1px solid var(--app-border);
+    border-radius: 12px;
+    padding: 1rem 1.25rem;
+    background: var(--app-card-bg);
+    color: var(--body-text-color);
+    margin-bottom: 0.75rem;
+}
+.sector-card-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--body-text-color);
+}
+.sector-card-sub {
+    font-size: 13px;
+    color: var(--app-text-secondary);
+    margin-top: 4px;
+}
+.sector-alternatives {
+    font-size: 12px;
+    color: var(--app-text-secondary);
+    margin-top: 6px;
+}
+
+/* Criteria evaluation rows */
+.criteria-container {
+    border: 1px solid var(--app-border);
+    border-radius: 12px;
+    padding: 1rem 1.25rem;
+    background: var(--app-card-bg);
+    color: var(--body-text-color);
+}
+.criteria-section { margin-bottom: 1rem; }
+.criteria-section:last-of-type { margin-bottom: 0; }
+.criteria-section-title {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--app-text-secondary);
+    margin-bottom: 8px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--app-border);
+}
+.criterion-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 8px 0;
+    border-bottom: 0.5px solid var(--app-border);
+    color: var(--body-text-color);
+}
+.criterion-row:last-child { border-bottom: none; }
+.criterion-icon { font-size: 13px; margin-top: 2px; flex-shrink: 0; }
+.criterion-body { flex: 1; min-width: 0; }
+.criterion-label { font-size: 13px; font-weight: 500; color: var(--body-text-color); }
+.criterion-evidence { font-size: 11px; color: var(--app-text-secondary); margin-top: 2px; }
+.criterion-score { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.criterion-bar {
+    width: 72px;
+    height: 5px;
+    background: var(--app-border);
+    border-radius: 3px;
+    overflow: hidden;
+}
+.criterion-fill { height: 100%; border-radius: 3px; }
+.criterion-pts {
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+    color: var(--body-text-color);
+    min-width: 46px;
+    text-align: right;
+}
+.criteria-footer {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid var(--app-border);
+    font-size: 13px;
+    text-align: right;
+    color: var(--body-text-color);
+}
+
 /* Timeline carrière */
 .timeline-entry {
     display: flex;
@@ -270,6 +356,204 @@ CUSTOM_CSS = """
     white-space: nowrap;
 }
 """
+
+
+# ── Phase C — Sector detection UI ────────────────────────────────────────────
+
+_JOB_TITLE_TO_PROFILE_ID: dict[str, str] = {
+    p.job_title: pid for pid, p in ALL_PROFILES.items()
+}
+
+
+def _build_sector_dropdown_choices() -> list[str]:
+    choices: list[str] = []
+    for sector_key, display_name in SECTOR_DISPLAY_NAMES.items():
+        pids = PROFILE_BY_SECTOR.get(display_name, [])
+        if not pids:
+            continue
+        choices.append(f"── {display_name} ──")
+        for pid in pids:
+            choices.append(ALL_PROFILES[pid].job_title)
+    return choices
+
+
+_SECTOR_DROPDOWN_CHOICES: list[str] = _build_sector_dropdown_choices()
+
+
+def _format_sector_detection_html(
+    sector_result: "SectorDetectionResult",
+    is_forced: bool = False,
+    ai_badge: bool = False,
+) -> str:
+    if sector_result is None:
+        return ""
+
+    is_generic = sector_result.profile_id == "non_detecte"
+    pct = int(sector_result.confidence * 100)
+
+    if is_forced:
+        badge = '<span class="skill-badge" style="background:#eef2ff;color:#4338ca">✏️ Corrigé</span>'
+    elif ai_badge:
+        badge = '<span class="skill-badge" style="background:#fef3c7;color:#92400e">🤖 Critères IA</span>'
+    elif is_generic:
+        badge = '<span class="skill-badge" style="background:#fee2e2;color:#991b1b">⚠️ Non identifié</span>'
+    else:
+        if sector_result.confidence >= 0.7:
+            bg, txt, label = "#dcfce7", "#166534", "Fiable"
+        elif sector_result.confidence >= 0.4:
+            bg, txt, label = "#fef3c7", "#92400e", "Probable"
+        else:
+            bg, txt, label = "#fee2e2", "#991b1b", "Incertain"
+        badge = f'<span class="skill-badge" style="background:{bg};color:{txt}">{label} · {pct}%</span>'
+
+    icon = "⚠️" if is_generic else "🎯"
+
+    alts_html = ""
+    if not is_forced and not is_generic and sector_result.confidence < 0.7 and sector_result.alternatives:
+        parts = []
+        for alt_id, alt_score in sector_result.alternatives[:3]:
+            p = ALL_PROFILES.get(alt_id)
+            if p:
+                parts.append(f"{p.job_title} ({int(alt_score * 100)}%)")
+        if parts:
+            alts_html = f'<div class="sector-alternatives">Autres possibilités : {" · ".join(parts)}</div>'
+
+    hint_html = ""
+    if is_generic:
+        hint_html = (
+            '<div class="sector-alternatives" style="margin-top:6px">'
+            "Utilisez le menu ci-dessous pour préciser votre métier et obtenir des critères adaptés."
+            "</div>"
+        )
+
+    return (
+        '<div class="sector-card">'
+        '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
+        f'<span style="font-size:16px">{icon}</span>'
+        f'<span class="sector-card-title">{sector_result.job_title}</span>'
+        f"{badge}"
+        "</div>"
+        f'<div class="sector-card-sub">{sector_result.sector}</div>'
+        f"{alts_html}"
+        f"{hint_html}"
+        "</div>"
+    )
+
+
+def _format_criteria_html(criteria_results: list) -> str:
+    if not criteria_results:
+        return ""
+
+    required = [r for r in criteria_results if r.required]
+    optional = [r for r in criteria_results if not r.required]
+    total_w = sum(r.weighted_score for r in criteria_results)
+
+    def _row(r: "CriterionResult") -> str:
+        if r.score == 100:
+            icon = "✅"
+        elif r.required:
+            icon = "❌"
+        else:
+            icon = "⚠️"
+        bar_color = "#22c55e" if r.score == 100 else ("#ef4444" if r.required else "#f59e0b")
+        ev_html = (
+            f'<div class="criterion-evidence">{" · ".join(r.evidence)}</div>'
+            if r.evidence
+            else ""
+        )
+        return (
+            '<div class="criterion-row">'
+            f'<span class="criterion-icon">{icon}</span>'
+            '<div class="criterion-body">'
+            f'<div class="criterion-label">{r.label}</div>'
+            f"{ev_html}"
+            "</div>"
+            '<div class="criterion-score">'
+            '<div class="criterion-bar">'
+            f'<div class="criterion-fill" style="width:{r.score}%;background:{bar_color}"></div>'
+            "</div>"
+            f'<span class="criterion-pts">{int(r.weighted_score)}/{r.weight} pts</span>'
+            "</div>"
+            "</div>"
+        )
+
+    def _section(title: str, rows: list) -> str:
+        if not rows:
+            return ""
+        return (
+            '<div class="criteria-section">'
+            f'<div class="criteria-section-title">{title}</div>'
+            + "".join(_row(r) for r in rows)
+            + "</div>"
+        )
+
+    score_color = "#22c55e" if total_w >= 75 else ("#f59e0b" if total_w >= 50 else "#ef4444")
+    level = "Solide" if total_w >= 75 else ("Correct" if total_w >= 50 else "À renforcer")
+
+    return (
+        '<div class="criteria-container">'
+        + _section("🔒 OBLIGATOIRES", required)
+        + _section("💡 RECOMMANDÉS", optional)
+        + f'<div class="criteria-footer">Score adapté : <strong style="color:{score_color}">{int(total_w)}/100</strong> · {level}</div>'
+        + "</div>"
+    )
+
+
+def _generate_ai_criteria(job_title: str) -> list | None:
+    """Call Claude Haiku to generate adaptive criteria for an undetected job title.
+
+    Consumes one budget_guard slot. Returns None on any failure.
+    """
+    if not settings.anthropic_api_key or not job_title:
+        return None
+    if not budget_guard.check_and_increment():
+        return None
+    try:
+        import anthropic
+        import json
+        import re as _re
+
+        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        prompt = (
+            f"Métier : {job_title}\n"
+            "Génère exactement 5 critères d'évaluation CV pertinents pour ce métier.\n"
+            "Réponds UNIQUEMENT avec un tableau JSON valide (pas de texte avant ni après).\n"
+            'Format : [{"id":"c1","label":"...","weight":20,"required":true,"keywords":["..."]}]\n'
+            "Contrainte absolue : somme des weight = 100 exactement. Réponds en français."
+        )
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = response.content[0].text.strip()
+        m = _re.search(r"\[.+\]", raw, _re.DOTALL)
+        if not m:
+            budget_guard.release()
+            return None
+        data = json.loads(m.group())
+        from src.core.sector_profiles import Criterion as _Criterion
+
+        criteria = [
+            _Criterion(
+                id=item["id"],
+                label=item["label"],
+                weight=int(item["weight"]),
+                required=bool(item.get("required", False)),
+                detection_fn="has_ai_criterion",
+                keywords=item.get("keywords", []),
+            )
+            for item in data
+        ]
+        if sum(c.weight for c in criteria) != 100:
+            budget_guard.release()
+            return None
+        logger.info("_generate_ai_criteria | 5 critères IA générés pour %r", job_title)
+        return criteria
+    except Exception as exc:
+        logger.warning("_generate_ai_criteria | erreur : %s", exc)
+        budget_guard.release()
+        return None
 
 
 def _score_color(score: float) -> str:
@@ -567,6 +851,9 @@ def _format_cv_context_strip(parsed_cv, report: CVQualityReport) -> str:
 
 # ── Handler 1 : traitement du CV ─────────────────────────────────────────────
 
+_PHASE_C_RESET = ("", "", gr.update(value=None), None, None)
+
+
 def on_cv_upload(cv_file, vision_calls):
     _reset = (
         "", "", "",          # quality_md, timeline_md, profile_md
@@ -577,6 +864,8 @@ def on_cv_upload(cv_file, vision_calls):
         vision_calls,                                         # vision_calls_state
         None,                                                  # cv_embedding_state
         "", "",                                               # metrics_html, skills_html
+        *_PHASE_C_RESET,                                      # sector_detection_html, sector_criteria_html,
+                                                              # sector_override_dropdown, sector_result_state, ai_criteria_state
     )
 
     if cv_file is None:
@@ -598,12 +887,29 @@ def on_cv_upload(cv_file, vision_calls):
             vision_calls,
             None,
             "", "",
+            *_PHASE_C_RESET,
         )
 
     parsed_cv = _nlp_pipeline.parse_normalized(normalized_cv)
     sector_result = _sector_detector.detect(parsed_cv)
     quality_report = _cv_quality_scorer.score(normalized_cv, sector_result=sector_result)
     cv_embedding = _semantic_scorer.encode_cv(normalized_cv.raw_text)
+
+    # Phase C — AI criteria for undetected sectors
+    ai_criteria = None
+    ai_badge = False
+    if sector_result.profile_id == "non_detecte" and parsed_cv.job_title:
+        ai_criteria = _generate_ai_criteria(parsed_cv.job_title)
+        if ai_criteria:
+            ai_badge = True
+
+    # Build criteria HTML (AI-generated or sector-detected)
+    if ai_criteria:
+        from src.services.criteria_evaluator import has_ai_criterion as _has_ai
+        ai_crit_results = [_has_ai(normalized_cv, c) for c in ai_criteria]
+        criteria_html = _format_criteria_html(ai_crit_results)
+    else:
+        criteria_html = _format_criteria_html(quality_report.criteria_results)
 
     quality_md = _format_quality_report(normalized_cv, quality_report)
     if not allow_vision and normalized_cv.extraction_confidence < 0.85:
@@ -623,6 +929,12 @@ def on_cv_upload(cv_file, vision_calls):
         cv_embedding,
         _format_metrics_html(normalized_cv, quality_report),
         _format_skill_badges(normalized_cv),
+        # Phase C outputs:
+        _format_sector_detection_html(sector_result, ai_badge=ai_badge),
+        criteria_html,
+        gr.update(value=None),   # reset sector dropdown
+        sector_result,
+        ai_criteria,
     )
 
 
@@ -636,6 +948,26 @@ def on_cv_clear():
         0,
         None,
         "", "",
+        *_PHASE_C_RESET,
+    )
+
+
+# ── Handler 1b : correction manuelle du secteur ──────────────────────────────
+
+def on_sector_override(choice, normalized_cv):
+    if not choice or choice.startswith("──"):
+        return gr.update(), gr.update(), gr.update()
+    profile_id = _JOB_TITLE_TO_PROFILE_ID.get(choice)
+    if not profile_id:
+        return gr.update(), gr.update(), gr.update()
+    forced = SectorDetector.make_forced_result(profile_id)
+    if normalized_cv is None:
+        return _format_sector_detection_html(forced, is_forced=True), "", forced
+    criteria_results = evaluate_criteria(normalized_cv, forced)
+    return (
+        _format_sector_detection_html(forced, is_forced=True),
+        _format_criteria_html(criteria_results),
+        forced,
     )
 
 
@@ -872,6 +1204,9 @@ with gr.Blocks(
     feedback_calls_state = gr.State(0)
     cv_embedding_state = gr.State(None)
     provider_status_state = gr.State({})
+    # Phase C
+    sector_result_state = gr.State(None)
+    ai_criteria_state = gr.State(None)
 
     with gr.Tabs():
 
@@ -893,6 +1228,19 @@ with gr.Blocks(
                     metrics_html = gr.HTML()
                     quality_md = gr.Markdown()
                     timeline_md = gr.Markdown()
+
+            # Phase C — Profil détecté + critères adaptatifs
+            with gr.Row():
+                with gr.Column(scale=1):
+                    sector_detection_html = gr.HTML()
+                    sector_override_dropdown = gr.Dropdown(
+                        choices=_SECTOR_DROPDOWN_CHOICES,
+                        label="Corriger le secteur / métier",
+                        value=None,
+                        interactive=True,
+                    )
+                with gr.Column(scale=2):
+                    sector_criteria_html = gr.HTML()
 
         # ── Onglet 2 : Recherche d'offres ─────────────────────────────────────
         with gr.Tab("🔍 Recherche d'offres"):
@@ -971,12 +1319,24 @@ with gr.Blocks(
         cv_embedding_state,
         metrics_html,
         skills_html,
+        # Phase C:
+        sector_detection_html,
+        sector_criteria_html,
+        sector_override_dropdown,
+        sector_result_state,
+        ai_criteria_state,
     ]
 
     cv_input.upload(
         fn=on_cv_upload, inputs=[cv_input, vision_calls_state], outputs=_upload_outputs
     )
     cv_input.clear(fn=on_cv_clear, outputs=_upload_outputs)
+
+    sector_override_dropdown.change(
+        fn=on_sector_override,
+        inputs=[sector_override_dropdown, normalized_cv_state],
+        outputs=[sector_detection_html, sector_criteria_html, sector_result_state],
+    )
 
     _search_outputs = [
         search_status_md,

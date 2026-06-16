@@ -154,6 +154,19 @@ class SectorDetector:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def make_forced_result(profile_id: str) -> "SectorDetectionResult":
+        """Build a SectorDetectionResult for a manually chosen profile_id."""
+        from src.core.sector_registry import ALL_PROFILES, GENERIC_PROFILE  # deferred
+        profile = ALL_PROFILES.get(profile_id) or GENERIC_PROFILE
+        return SectorDetectionResult(
+            profile_id=profile.id,
+            sector=profile.sector,
+            job_title=profile.job_title,
+            confidence=1.0,
+            alternatives=[],
+        )
+
     def _get_model(self):
         if self._injected_model is not None:
             return self._injected_model

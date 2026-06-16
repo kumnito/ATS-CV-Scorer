@@ -165,6 +165,21 @@ def has_languages(cv: NormalizedCV, criterion: Criterion) -> CriterionResult:
     return _make_result(criterion, scored, evidence)
 
 
+def has_ai_criterion(cv: NormalizedCV, criterion: Criterion) -> CriterionResult:
+    """Keyword-based evaluation for AI-generated criteria (detection_fn='has_ai_criterion')."""
+    if not criterion.keywords:
+        return _make_result(criterion, False, ["Aucun mot-clé configuré"])
+    check = cv.raw_text.lower()
+    found = [kw for kw in criterion.keywords if kw.lower() in check]
+    scored = len(found) >= 1
+    evidence = (
+        [f"Mots-clés trouvés : {', '.join(found)}"]
+        if found
+        else ["Aucun mot-clé détecté dans le CV"]
+    )
+    return _make_result(criterion, scored, evidence)
+
+
 # ---------------------------------------------------------------------------
 # Registry — detection_fn name → function
 # ---------------------------------------------------------------------------
@@ -183,6 +198,7 @@ _EVAL_FUNCTIONS: dict[str, Callable] = {
     "has_profile_keywords": has_profile_keywords,
     "has_habilitations":    has_habilitations,
     "has_languages":        has_languages,
+    "has_ai_criterion":     has_ai_criterion,
 }
 
 

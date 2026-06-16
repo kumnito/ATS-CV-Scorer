@@ -3,7 +3,7 @@
 import logging
 import re
 from datetime import date
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from src.core.lexicons import ACTION_VERBS_EN, ACTION_VERBS_FR, METRIC_PATTERNS, SKILL_CATEGORIES
 from src.core.schemas import (
@@ -13,6 +13,9 @@ from src.core.schemas import (
     ProfileStrength,
     Recommendation,
 )
+
+if TYPE_CHECKING:
+    from src.services.sector_detector import SectorDetectionResult
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +35,11 @@ _ACTION_NOUNS_FR = frozenset({
 
 
 class CVQualityScorer:
-    def score(self, cv: NormalizedCV) -> CVQualityReport:
+    def score(
+        self,
+        cv: NormalizedCV,
+        sector_result: Optional["SectorDetectionResult"] = None,
+    ) -> CVQualityReport:
         detected = _detected_sections(cv)
         missing = [s for s in _REQUIRED_SECTIONS if s not in detected]
         career = _career_stats(cv)
@@ -60,6 +67,11 @@ class CVQualityScorer:
         logger.info("profile_strength: %d/100 (%s)", strength.score, strength.level)
         logger.info("is_machine_readable: %s | kd: %.3f", ats.is_machine_readable, kd)
 
+        criteria_results = []
+        if sector_result is not None:
+            from src.services.criteria_evaluator import evaluate_criteria
+            criteria_results = evaluate_criteria(cv, sector_result)
+
         return CVQualityReport(
             ats_readability=ats,
             profile_strength=strength,
@@ -71,6 +83,10 @@ class CVQualityScorer:
             career_gaps=gaps,
             extraction_method=cv.extraction_method,
             extraction_confidence=cv.extraction_confidence,
+            detected_sector=sector_result.sector if sector_result else None,
+            detected_profile=sector_result.profile_id if sector_result else None,
+            detection_confidence=sector_result.confidence if sector_result else 0.0,
+            criteria_results=criteria_results,
         )
 
 

@@ -21,6 +21,7 @@ from src.services.job_providers.france_travail import FranceTravailProvider
 from src.services.job_providers.jooble import JoobleProvider
 from src.services.job_providers.orchestrator import JobSearchOrchestrator
 from src.services.nlp_pipeline import NLPPipeline
+from src.services.sector_detector import SectorDetector
 from src.services.semantic_scorer import SemanticScorer
 
 
@@ -45,6 +46,7 @@ init_lexicons()
 
 _cv_transformer = CVTransformer()
 _nlp_pipeline = NLPPipeline()
+_sector_detector = SectorDetector()
 _semantic_scorer = SemanticScorer()
 _cv_quality_scorer = CVQualityScorer()
 _providers = [
@@ -599,7 +601,8 @@ def on_cv_upload(cv_file, vision_calls):
         )
 
     parsed_cv = _nlp_pipeline.parse_normalized(normalized_cv)
-    quality_report = _cv_quality_scorer.score(normalized_cv)
+    sector_result = _sector_detector.detect(parsed_cv)
+    quality_report = _cv_quality_scorer.score(normalized_cv, sector_result=sector_result)
     cv_embedding = _semantic_scorer.encode_cv(normalized_cv.raw_text)
 
     quality_md = _format_quality_report(normalized_cv, quality_report)

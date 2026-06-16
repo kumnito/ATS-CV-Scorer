@@ -1264,6 +1264,17 @@ PROFILE_BY_SECTOR: dict[str, list[str]] = {
 }
 
 # ---------------------------------------------------------------------------
+# Populate criteria for every profile via CriteriaBuilder
+# ---------------------------------------------------------------------------
+
+from src.services.criteria_builder import CriteriaBuilder as _CriteriaBuilder  # noqa: E402
+
+_builder = _CriteriaBuilder()
+for _sector_key, _pids in SECTORS.items():
+    for _pid in _pids:
+        ALL_PROFILES[_pid].criteria = _builder.build_for_profile(ALL_PROFILES[_pid], _sector_key)
+
+# ---------------------------------------------------------------------------
 # Generic fallback profile — used when confidence < 0.3
 # ---------------------------------------------------------------------------
 

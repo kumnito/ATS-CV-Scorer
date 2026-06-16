@@ -119,6 +119,16 @@ class Recommendation(BaseModel):
     why: str
 
 
+class CriterionResult(BaseModel):
+    criterion_id: str
+    label: str
+    weight: int
+    required: bool
+    score: int                          # 0 ou 100 (binaire)
+    evidence: list[str] = Field(default_factory=list)
+    weighted_score: float = 0.0         # score * weight / 100
+
+
 class CVQualityReport(BaseModel):
     ats_readability: ATSReadability
     profile_strength: ProfileStrength
@@ -134,6 +144,12 @@ class CVQualityReport(BaseModel):
     # Extraction pipeline (conservé pour compatibilité)
     extraction_method: str = "pdfplumber"
     extraction_confidence: float = 1.0
+
+    # Phase B — scoring adaptatif par secteur/métier
+    detected_sector: Optional[str] = None
+    detected_profile: Optional[str] = None
+    detection_confidence: float = 0.0
+    criteria_results: list[CriterionResult] = Field(default_factory=list)
 
 
 class ScoreBreakdown(BaseModel):

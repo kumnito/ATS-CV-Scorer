@@ -13,7 +13,6 @@ from src.core.config import settings
 from src.core.lexicons import init_lexicons
 from src.core.schemas import CVQualityReport, CriterionResult, NormalizedCV
 from src.services.claude_feedback import ClaudeBudgetExceeded, ClaudeFeedback, ClaudeServiceError
-from src.services.criteria_evaluator import evaluate_criteria
 from src.services.cv_quality_scorer import CVQualityScorer
 from src.services.cv_transformer import CVTransformer
 from src.services.job_matcher import FRANCE_REGIONS, find_matching_jobs
@@ -954,20 +953,23 @@ def on_cv_clear():
 
 # ── Handler 1b : correction manuelle du secteur ──────────────────────────────
 
-def on_sector_override(choice, normalized_cv):
+def on_sector_override(choice, normalized_cv, parsed_cv):
     if not choice or choice.startswith("──"):
-        return gr.update(), gr.update(), gr.update()
+        return gr.update(), gr.update(), gr.update(), gr.update()
     profile_id = _JOB_TITLE_TO_PROFILE_ID.get(choice)
     if not profile_id:
-        return gr.update(), gr.update(), gr.update()
+        return gr.update(), gr.update(), gr.update(), gr.update()
     forced = SectorDetector.make_forced_result(profile_id)
     if normalized_cv is None:
-        return _format_sector_detection_html(forced, is_forced=True), "", forced
-    criteria_results = evaluate_criteria(normalized_cv, forced)
+        return _format_sector_detection_html(forced, is_forced=True), "", forced, gr.update()
+    # parsed_cv has skills_flat populated (NLP); fall back to normalized_cv if missing.
+    cv_for_scoring = parsed_cv if parsed_cv is not None else normalized_cv
+    quality_report = _cv_quality_scorer.score(cv_for_scoring, sector_result=forced)
     return (
         _format_sector_detection_html(forced, is_forced=True),
-        _format_criteria_html(criteria_results),
+        _format_criteria_html(quality_report.criteria_results),
         forced,
+        quality_report,
     )
 
 
@@ -1339,8 +1341,8 @@ with gr.Blocks(
 
     sector_override_dropdown.change(
         fn=on_sector_override,
-        inputs=[sector_override_dropdown, normalized_cv_state],
-        outputs=[sector_detection_html, sector_criteria_html, sector_result_state],
+        inputs=[sector_override_dropdown, normalized_cv_state, parsed_cv_state],
+        outputs=[sector_detection_html, sector_criteria_html, sector_result_state, quality_report_state],
     )
 
     _search_outputs = [

@@ -300,7 +300,22 @@ make run            # UI Gradio → http://localhost:7860
 make dev            # API FastAPI → http://localhost:8000/docs
 make test           # 374 tests, 10 skippés (PDFs privés)
 make benchmark-sectoriel  # rapport CSV détection × scoring par CV
+make update-lexicons      # régénère lexicons_generated.json (voir ci-dessous)
 ```
 
 OCR (niveau 2) requiert : `tesseract-ocr`, `tesseract-ocr-fra`, `poppler-utils`
 (pré-installés sur l'image HF Spaces via `packages.txt`).
+
+## Mise à jour des lexiques ESCO
+
+```bash
+make update-lexicons
+```
+
+Déclenche `LexiconBuilder.build(force_refresh=True)` :
+1. Interroge l'API ESCO (Union Européenne) pour les compétences numériques et transversales.
+2. Fusionne avec les lexiques sectoriels du projet (`SKILL_CATEGORIES`, `SECTOR_KEYWORDS`).
+3. Régénère `src/core/lexicons_generated.json` (commit le fichier pour propager les mises à jour).
+4. Relancer l'app (`make run`) pour que `init_lexicons()` charge le nouveau fichier.
+
+La commande est idempotente — sans `--force`, elle ne requête pas l'API si le fichier existe et date de moins de 7 jours.

@@ -892,7 +892,7 @@ def on_cv_upload(cv_file, vision_calls):
 
     parsed_cv = _nlp_pipeline.parse_normalized(normalized_cv)
     sector_result = _sector_detector.detect(parsed_cv)
-    quality_report = _cv_quality_scorer.score(normalized_cv, sector_result=sector_result)
+    quality_report = _cv_quality_scorer.score(parsed_cv, sector_result=sector_result)
     cv_embedding = _semantic_scorer.encode_cv(normalized_cv.raw_text)
 
     # Phase C — AI criteria for undetected sectors

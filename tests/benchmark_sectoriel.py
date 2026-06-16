@@ -104,7 +104,7 @@ def run_benchmark(sample_dir: Path = SAMPLE_DIR) -> list[dict]:
             cv = transformer.transform(str(pdf_path))
             parsed_cv = nlp.parse_normalized(cv)
             sector_result = detector.detect(parsed_cv)
-            report = scorer.score(cv, sector_result=sector_result)
+            report = scorer.score(parsed_cv, sector_result=sector_result)
 
             score_avant = report.profile_strength.score
             level_avant = report.profile_strength.level

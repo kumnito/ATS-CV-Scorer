@@ -111,8 +111,20 @@ class SectorDetector:
             return {}
 
         model = self._get_model()
-        title_emb = model.encode([cv.job_title], convert_to_numpy=True)
-        sims = cosine_similarity(title_emb, self._aliases_matrix)[0]
+
+        # job_title may contain noise (name, phone, email) extracted from
+        # the header area. Build n-gram windows (2–4 words) so that a clean
+        # sub-phrase like "devops engineer" can still match an alias even if
+        # the full string is "tony almeida devops engineer 1 333 555 7777…".
+        words = cv.job_title.split()
+        candidates = [cv.job_title]
+        for n in (2, 3, 4):
+            for i in range(len(words) - n + 1):
+                candidates.append(" ".join(words[i : i + n]))
+
+        title_embs = model.encode(candidates, convert_to_numpy=True)
+        sims_matrix = cosine_similarity(title_embs, self._aliases_matrix)
+        sims = sims_matrix.max(axis=0)  # best match across all candidate windows
 
         result: dict[str, float] = {}
         for i, pid in enumerate(self._alias_profile_ids):

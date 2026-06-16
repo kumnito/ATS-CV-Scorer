@@ -1,18 +1,53 @@
+from __future__ import annotations
+
 import logging
+from typing import TYPE_CHECKING, Optional
 
 import anthropic
 
 from src.core.budget_guard import budget_guard
 from src.core.config import settings
-from src.core.schemas import NormalizedCV, ScoringResult
+from src.core.schemas import CriterionResult, NormalizedCV, ScoringResult
+
+if TYPE_CHECKING:
+    from src.services.sector_detector import SectorDetectionResult
 
 logger = logging.getLogger(__name__)
 
-_SYSTEM_PROMPT = """You are an expert ATS (Applicant Tracking System) analyst and career coach.
-Evaluate CVs against job descriptions and provide concise, actionable feedback.
-Focus on: skill alignment, experience relevance, missing ATS keywords, and structural improvements.
-Always respond in French, regardless of the language of the CV or job description.
-Be direct and specific. Format your response in markdown."""
+_SYSTEM_PROMPT = """Tu es un expert en recrutement et optimisation de CV pour le marché français.
+Tu fournis des conseils précis, actionnables et bienveillants.
+Réponds toujours en français, quel que soit la langue du CV ou de l'offre.
+Sois direct et spécifique. Formate ta réponse en markdown."""
+
+
+def _build_sector_block(
+    sector_result: "SectorDetectionResult",
+    criteria_results: list[CriterionResult],
+) -> str:
+    lines = [
+        "## Profil détecté par l'ATS",
+        f"- **Intitulé** : {sector_result.job_title}",
+        f"- **Secteur** : {sector_result.sector}",
+        f"- **Confiance** : {sector_result.confidence:.0%}",
+        "",
+    ]
+    ko_req = [r for r in criteria_results if r.score == 0 and r.required]
+    ko_opt = [r for r in criteria_results if r.score == 0 and not r.required]
+
+    if ko_req:
+        lines.append("## Critères obligatoires non satisfaits (priorité absolue)")
+        for r in ko_req:
+            ev = r.evidence[0] if r.evidence else "—"
+            lines.append(f"- **{r.label}** ({r.weight} pts) : {ev}")
+        lines.append("")
+
+    if ko_opt:
+        lines.append("## Critères recommandés non satisfaits")
+        for r in ko_opt:
+            lines.append(f"- {r.label} ({r.weight} pts)")
+        lines.append("")
+
+    return "\n".join(lines)
 
 
 class ClaudeBudgetExceeded(Exception):
@@ -39,13 +74,40 @@ class ClaudeFeedback:
         parsed_cv: NormalizedCV,
         job_description: str,
         scoring_result: ScoringResult,
+        sector_result: Optional["SectorDetectionResult"] = None,
+        criteria_results: Optional[list[CriterionResult]] = None,
     ) -> str:
         if not budget_guard.check_and_increment():
             raise ClaudeBudgetExceeded(
                 f"Claude calls limit reached ({budget_guard.limit})."
             )
 
-        user_content = f"""## Job Description
+        if sector_result is not None:
+            sector_block = _build_sector_block(sector_result, criteria_results or [])
+            user_content = f"""{sector_block}
+## Offre d'emploi
+{job_description[:2000]}
+
+## Compétences détectées
+{", ".join(parsed_cv.skills_flat[:25]) or "aucune"}
+
+## Score de compatibilité : {scoring_result.overall_score:.0f}/100
+
+## Extrait du CV
+{parsed_cv.raw_text[:2000]}
+
+---
+Génère un feedback structuré en 3 parties :
+
+**1. POINTS FORTS** (2-3 éléments positifs spécifiques au profil {sector_result.job_title})
+
+**2. POINTS À AMÉLIORER** (basé sur les critères obligatoires non satisfaits — sois précis et actionnable, pas générique)
+
+**3. CONSEIL PRIORITAIRE** (une action concrète à faire MAINTENANT pour ce poste spécifique)
+
+Ton : professionnel, bienveillant, direct. Maximum 250 mots. En français."""
+        else:
+            user_content = f"""## Job Description
 {job_description[:2000]}
 
 ## CV Analysis

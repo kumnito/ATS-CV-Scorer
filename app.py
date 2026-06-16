@@ -1152,7 +1152,7 @@ _ANALYZE_LOADING_MD = (
 
 
 def _make_analyze_handler(index: int):
-    def _analyze_one(parsed_cv, matches, feedback_calls):
+    def _analyze_one(parsed_cv, matches, feedback_calls, sector_result, quality_report):
         if not matches or index >= len(matches):
             yield gr.update(value="", visible=False), feedback_calls
             return
@@ -1164,10 +1164,15 @@ def _make_analyze_handler(index: int):
         yield gr.update(value=_ANALYZE_LOADING_MD, visible=True), feedback_calls
 
         match = matches[index]
+        criteria = quality_report.criteria_results if quality_report else None
         try:
             cf = ClaudeFeedback()
             feedback = cf.generate_feedback(
-                parsed_cv, match.job.description, match.scoring_result
+                parsed_cv,
+                match.job.description,
+                match.scoring_result,
+                sector_result=sector_result,
+                criteria_results=criteria,
             )
             feedback_calls += 1
         except ValueError:
@@ -1375,7 +1380,13 @@ with gr.Blocks(
     for idx, (_, _, slot_analyze_btn, slot_feedback_md) in enumerate(job_slots):
         slot_analyze_btn.click(
             fn=_make_analyze_handler(idx),
-            inputs=[parsed_cv_state, matches_state, feedback_calls_state],
+            inputs=[
+                parsed_cv_state,
+                matches_state,
+                feedback_calls_state,
+                sector_result_state,
+                quality_report_state,
+            ],
             outputs=[slot_feedback_md, feedback_calls_state],
         )
 

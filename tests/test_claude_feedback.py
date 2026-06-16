@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import anthropic
@@ -5,7 +6,7 @@ import httpx
 import pytest
 
 from src.core.budget_guard import BudgetGuard
-from src.core.schemas import NormalizedCV, ScoreBreakdown, ScoringResult
+from src.core.schemas import CriterionResult, NormalizedCV, ScoreBreakdown, ScoringResult
 from src.services import claude_feedback
 from src.services.claude_feedback import ClaudeBudgetExceeded, ClaudeFeedback, ClaudeServiceError
 
@@ -44,6 +45,108 @@ def _mock_anthropic_response(text: str = "feedback en français") -> MagicMock:
     response = MagicMock()
     response.content = [MagicMock(text=text)]
     return response
+
+
+def _make_sector_result() -> SimpleNamespace:
+    return SimpleNamespace(
+        profile_id="devops",
+        job_title="DevOps Engineer",
+        sector="Informatique & Digital",
+        confidence=0.70,
+        alternatives=[],
+    )
+
+
+def _make_criteria_results() -> list[CriterionResult]:
+    return [
+        CriterionResult(
+            criterion_id="eval_formation",
+            label="Formation informatique",
+            weight=15,
+            required=True,
+            score=0,
+            evidence=["Aucune formation détectée"],
+            weighted_score=0.0,
+        ),
+        CriterionResult(
+            criterion_id="eval_experience",
+            label="Expérience professionnelle",
+            weight=20,
+            required=True,
+            score=100,
+            evidence=["2 expérience(s) détectée(s)"],
+            weighted_score=20.0,
+        ),
+        CriterionResult(
+            criterion_id="eval_projects",
+            label="Projets documentés",
+            weight=15,
+            required=False,
+            score=0,
+            evidence=["Aucun projet documenté"],
+            weighted_score=0.0,
+        ),
+    ]
+
+
+class TestClaudeFeedbackSectoriel:
+    def _run_feedback(self, mock_client, sector_result=None, criteria_results=None):
+        cf = ClaudeFeedback(api_key="sk-test")
+        return cf.generate_feedback(
+            _make_parsed_cv(),
+            "Job description en anglais",
+            _make_scoring_result(),
+            sector_result=sector_result,
+            criteria_results=criteria_results,
+        )
+
+    def test_with_sector_result_prompt_contains_job_title(self, _isolated_budget_guard):
+        with patch("src.services.claude_feedback.anthropic.Anthropic") as mock_anthropic:
+            mock_client = MagicMock()
+            mock_client.messages.create.return_value = _mock_anthropic_response("feedback sectoriel")
+            mock_anthropic.return_value = mock_client
+
+            self._run_feedback(mock_client, sector_result=_make_sector_result())
+
+        call_kwargs = mock_client.messages.create.call_args.kwargs
+        user_msg = call_kwargs["messages"][0]["content"]
+        assert "DevOps Engineer" in user_msg
+
+    def test_with_sector_result_prompt_lists_required_ko_criteria(self, _isolated_budget_guard):
+        with patch("src.services.claude_feedback.anthropic.Anthropic") as mock_anthropic:
+            mock_client = MagicMock()
+            mock_client.messages.create.return_value = _mock_anthropic_response("feedback sectoriel")
+            mock_anthropic.return_value = mock_client
+
+            self._run_feedback(
+                mock_client,
+                sector_result=_make_sector_result(),
+                criteria_results=_make_criteria_results(),
+            )
+
+        call_kwargs = mock_client.messages.create.call_args.kwargs
+        user_msg = call_kwargs["messages"][0]["content"]
+        # Critère required KO doit apparaître
+        assert "Formation informatique" in user_msg
+        # Critère required OK ne doit pas apparaître dans la section KO
+        assert "Expérience professionnelle" not in user_msg
+        # Critère optional KO doit apparaître (section recommandés)
+        assert "Projets documentés" in user_msg
+
+    def test_without_sector_result_uses_generic_prompt(self, _isolated_budget_guard):
+        with patch("src.services.claude_feedback.anthropic.Anthropic") as mock_anthropic:
+            mock_client = MagicMock()
+            mock_client.messages.create.return_value = _mock_anthropic_response("feedback générique")
+            mock_anthropic.return_value = mock_client
+
+            self._run_feedback(mock_client, sector_result=None)
+
+        call_kwargs = mock_client.messages.create.call_args.kwargs
+        user_msg = call_kwargs["messages"][0]["content"]
+        # Le prompt générique n'a pas la structure en 3 parties sectorielles
+        assert "POINTS FORTS" not in user_msg
+        # Mais il contient les éléments du prompt original
+        assert "Job Description" in user_msg
 
 
 class TestClaudeFeedbackInit:

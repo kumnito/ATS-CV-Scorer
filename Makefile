@@ -1,4 +1,4 @@
-.PHONY: install install-dev run dev test lint format clean update-lexicons install-ocr benchmark
+.PHONY: install install-dev run dev test lint format clean update-lexicons install-ocr benchmark benchmark-sectoriel
 
 VENV := .venv
 PYTHON := $(VENV)/bin/python
@@ -38,6 +38,10 @@ install-ocr: install
 
 benchmark: install-dev
 	$(PYTHON) tests/benchmark_ats.py
+	$(PYTHON) tests/benchmark_sectoriel.py
+
+benchmark-sectoriel: install-dev
+	$(PYTHON) tests/benchmark_sectoriel.py
 
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} +

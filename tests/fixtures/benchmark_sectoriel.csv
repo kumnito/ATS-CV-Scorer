@@ -1,0 +1,16 @@
+cv_name,secteur_detecte,confidence,profile_id,score_avant,score_apres,level_avant,level_apres,delta
+hf_data_data_science.pdf,Informatique & Digital,0.36,data_analyst,80,55,Solide,Correct,-25
+hf_data_database.pdf,Générique,0.21,non_detecte,45,70,À renforcer,Correct,25
+hf_engineering_civil_engineer.pdf,Générique,0.21,non_detecte,55,55,Correct,Correct,0
+hf_engineering_mechanical_engineer.pdf,Générique,0.14,non_detecte,55,55,Correct,Correct,0
+hf_non-tech_health_and_fitness.pdf,Générique,0.21,non_detecte,35,35,À renforcer,À renforcer,0
+hf_non-tech_human_resources.pdf,Générique,0.2,non_detecte,35,55,À renforcer,Correct,20
+hf_sales_business_analyst.pdf,Générique,0.23,non_detecte,60,15,Correct,À renforcer,-45
+hf_sales_sales.pdf,Générique,0.23,non_detecte,65,50,Correct,Correct,-15
+hf_tech_devops.pdf,Générique,0.23,non_detecte,70,50,Correct,Correct,-20
+hf_tech_information_technology.pdf,Générique,0.0,non_detecte,20,15,À renforcer,À renforcer,-5
+synth_reconversion_fr.pdf,Générique,0.06,non_detecte,55,85,Correct,Solide,30
+synth_single_column_backend_engineer.pdf,Informatique & Digital,0.33,devops,85,80,Solide,Solide,-5
+synth_single_column_marketing_manager.pdf,Marketing & Communication,0.4,marketing_manager,65,90,Correct,Solide,25
+synth_two_columns_data_analyst.pdf,Informatique & Digital,0.66,data_analyst,85,80,Solide,Solide,-5
+synth_two_columns_product_manager.pdf,Informatique & Digital,0.44,product_manager,85,65,Solide,Correct,-20

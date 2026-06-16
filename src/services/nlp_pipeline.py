@@ -180,7 +180,8 @@ def _extract_location(
 ) -> Optional[str]:
     postal_match = POSTAL_CODE_CITY_RE.search(header_text)
     if postal_match:
-        return postal_match.group(2).strip().title()
+        city = postal_match.group(2) or postal_match.group(3)
+        return city.strip().title() if city else None
 
     locations = list(
         dict.fromkeys(

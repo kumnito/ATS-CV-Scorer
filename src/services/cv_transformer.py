@@ -913,7 +913,8 @@ def _extract_location_from_text(text: str) -> Optional[str]:
     """Retourne la ville si une adresse postale FR est détectée (code postal + ville)."""
     m = POSTAL_CODE_CITY_RE.search(text)
     if m:
-        return m.group(2).strip().title()
+        city = m.group(2) or m.group(3)
+        return city.strip().title() if city else None
     return None
 
 
@@ -921,7 +922,7 @@ def _extract_postal_code_from_text(text: str) -> Optional[str]:
     """Retourne le code postal à 5 chiffres si une adresse postale FR est détectée."""
     m = POSTAL_CODE_CITY_RE.search(text)
     if m:
-        return m.group(1)
+        return m.group(1) or m.group(4)
     return None
 
 

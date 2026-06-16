@@ -161,6 +161,24 @@ def test_extract_location_filters_language_names():
     assert _extract_location("Keo PEN\npen.keoh@gmail.com", {"locations": ["Anglais"]}) is None
 
 
+def test_extract_location_city_first_format():
+    # "Croix, 59170" — ordre ville-avant-code-postal (format courant sur les CV FR).
+    # en_core_web_sm classe "Croix" comme PERSON et non GPE/LOC ; seul le regex
+    # code-postal permet la détection fiable.
+    header = "Kumnito PEN\nMachine Learning Engineer\n06.59.75.86.29 · voroman@hotmail.fr · Croix, 59170 · github.com/kumnito"
+    assert _extract_location(header, {"locations": []}) == "Croix"
+
+
+def test_extract_location_city_first_returns_postal_code(tmp_path):
+    # Vérifie que le code postal est aussi extrait quand le format est ville-avant.
+    from src.core.lexicons import POSTAL_CODE_CITY_RE
+    header = "Kumnito PEN · Croix, 59170"
+    m = POSTAL_CODE_CITY_RE.search(header)
+    assert m is not None
+    assert (m.group(1) or m.group(4)) == "59170"
+    assert (m.group(2) or m.group(3)).strip().title() == "Croix"
+
+
 def test_extract_location_filters_soft_skill_words():
     assert _extract_location("Jane Doe\nDeveloper", {"locations": ["Autonome"]}) is None
 

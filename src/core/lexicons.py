@@ -262,8 +262,15 @@ PROPER_NOUN_RUN_RE = re.compile(
     r"[A-ZÀ-Ý][\wà-öù-ÿ'-]*(?:[\s,-]+[A-ZÀ-Ý][\wà-öù-ÿ'-]*)*"
 )
 
+# Matches two orderings of FR postal address:
+#   postal-first : "59170 Croix"  → group(1)=postal, group(2)=city
+#   city-first   : "Croix, 59170" → group(3)=city,   group(4)=postal
+# Callers must use: city = m.group(2) or m.group(3)
+#                   postal = m.group(1) or m.group(4)
+_PC = r"\b(\d{5})\b"
+_CITY = r"([A-ZÀ-Ý][\wà-öù-ÿ'-]*(?:[ \t-][A-ZÀ-Ý][\wà-öù-ÿ'-]*)*)"
 POSTAL_CODE_CITY_RE = re.compile(
-    r"\b(\d{5})\b[ \t,–—-]*([A-ZÀ-Ý][\wà-öù-ÿ'-]*(?:[ \t-][A-ZÀ-Ý][\wà-öù-ÿ'-]*)*)"
+    rf"(?:{_PC}[ \t,–—-]*{_CITY}|{_CITY}[ \t]*,[ \t]*{_PC})"
 )
 
 TITLE_SPLIT_RE = re.compile(r"\s+[-–—,]\s+|\s*\|\s*")

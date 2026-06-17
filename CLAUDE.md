@@ -137,6 +137,6 @@ PDF
 
 | Dette | Impact | Effort |
 |---|---|---|
-| Lexiques ESCO (`lexicons_generated.json` gitignorés) | Sur un déploiement frais HF Spaces, le matching sémantique ESCO se désactive silencieusement | Faible — `make update-lexicons` existe (depuis `ec683bf`), reste à clarifier le statut des fichiers générés au déploiement |
+| Lexiques ESCO snapshot statique | `lexicons_generated.json` + `lexicons_embeddings.npy` versionnés (7 KB + 164 KB) — snapshot à régénérer via `make update-lexicons` quand l'ESCO évolue | Faible — commit + push suffit |
 | 10 tests skippés structurellement | Couverture layout 2 colonnes non régressée en CI | Faible — générer des fixtures synthétiques avec reportlab |
 | France Travail absent de `/find-jobs` API | Orchestrateur API : Adzuna + Jooble seulement | Faible — ajouter `FranceTravailProvider` à `_orchestrator` dans `server.py` |

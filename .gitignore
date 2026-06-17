@@ -15,6 +15,4 @@ venv/
 !tests/fixtures/synth_two_columns_simple.pdf
 !tests/fixtures/synth_two_columns_sidebar.pdf
 uploads/
-lexicons_generated.json
-lexicons_embeddings.npy
 tests/fixtures/benchmark_report.csv

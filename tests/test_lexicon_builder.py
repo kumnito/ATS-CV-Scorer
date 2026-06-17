@@ -1,14 +1,12 @@
 """Tests for LexiconBuilder — all network calls are mocked."""
 
 import json
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from src.services.lexicon_builder import (
     LexiconBuilder,
-    _TRIVIAL_OCCUPATION_WORDS,
     _categorize,
     _detect_skill_field,
     _merge_partial,
@@ -351,7 +349,7 @@ class TestFetchHuggingFace:
             ])
         )
 
-        builder = LexiconBuilder(output_path=tmp_path / "out.json")
+        _builder = LexiconBuilder(output_path=tmp_path / "out.json")
         with patch("src.services.lexicon_builder.LexiconBuilder._fetch_huggingface") as mock_hf:
             mock_hf.return_value = {
                 "skill_categories": {"ml": ["pytorch"], "data": ["apache kafka"], "other": ["some obscure thing xyz"]},
@@ -359,7 +357,6 @@ class TestFetchHuggingFace:
                 "action_verbs_en": [],
                 "action_verbs_fr": [],
             }
-            result = builder._fetch_huggingface.__wrapped__ if hasattr(builder._fetch_huggingface, "__wrapped__") else None
 
         # Test via integration with mocked load_dataset
         with patch("builtins.__import__", side_effect=lambda name, *a, **kw: _mock_datasets_import(name, mock_ds)):

@@ -140,7 +140,6 @@ def test_date_range_years_only():
 
 
 def test_date_range_present():
-    from datetime import date
     ds, de, dm, ic = extract_date_range("Jan 2021 – Present")
     assert ds is not None
     assert ic is True

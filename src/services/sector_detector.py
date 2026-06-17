@@ -22,16 +22,6 @@ logger = logging.getLogger(__name__)
 
 _CONFIDENCE_THRESHOLD: float = 0.3
 
-_model = None
-
-
-def _get_model():
-    global _model
-    if _model is None:
-        from sentence_transformers import SentenceTransformer
-        _model = SentenceTransformer("all-MiniLM-L6-v2")
-    return _model
-
 
 @dataclass
 class SectorDetectionResult:
@@ -182,7 +172,8 @@ class SectorDetector:
     def _get_model(self):
         if self._injected_model is not None:
             return self._injected_model
-        return _get_model()
+        from src.core.model_registry import get_minilm
+        return get_minilm()
 
     def _ensure_aliases_matrix(self) -> None:
         if self._aliases_matrix is not None:

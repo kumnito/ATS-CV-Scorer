@@ -330,7 +330,7 @@ def test_extract_sector_returns_none_with_no_experience():
 
 
 def test_parse_normalized_sets_sector_field(pipeline):
-    from src.core.schemas import CVHeader, CVSkills
+    from src.core.schemas import CVHeader
 
     cv = NormalizedCV(
         header=CVHeader(name="Test", title="Vendeur"),

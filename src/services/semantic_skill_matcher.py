@@ -21,17 +21,9 @@ from src.core.lexicons import (
     SEMANTIC_SKILL_MATCH_THRESHOLD,
 )
 
-_MODEL_NAME = "all-MiniLM-L6-v2"
-_model = None
-
-
 def _get_model():
-    global _model
-    if _model is None:
-        from sentence_transformers import SentenceTransformer
-
-        _model = SentenceTransformer(_MODEL_NAME)
-    return _model
+    from src.core.model_registry import get_minilm
+    return get_minilm()
 
 
 def match_semantic_skills(

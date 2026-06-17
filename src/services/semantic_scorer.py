@@ -67,7 +67,12 @@ _NICE_SECTIONS = {"summary", "projects", "certifications"}
 
 class SemanticScorer:
     def __init__(self, model_name: str = "all-MiniLM-L6-v2") -> None:
-        self.model = SentenceTransformer(model_name)
+        from src.core.model_registry import get_minilm
+        self.model = (
+            get_minilm()
+            if model_name == "all-MiniLM-L6-v2"
+            else SentenceTransformer(model_name)
+        )
 
     def encode_cv(self, cv_text: str) -> np.ndarray:
         """Encoder le texte du CV une seule fois, réutilisable pour plusieurs offres."""

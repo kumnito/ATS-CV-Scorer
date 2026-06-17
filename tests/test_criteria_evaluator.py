@@ -374,7 +374,6 @@ class TestEvaluateCriteria:
 
     def test_unknown_detection_fn_returns_score_0(self):
         """Fonction inconnue → score=0, pas d'exception."""
-        from src.core.sector_profiles import Criterion, SectorProfile
         from src.services.sector_detector import SectorDetectionResult
         from src.core.sector_registry import ALL_PROFILES
         # Injecter temporairement un critère avec fn inconnue

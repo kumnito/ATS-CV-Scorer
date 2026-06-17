@@ -8,8 +8,7 @@ _score_skills and _score_experience run against real logic.
 import pytest
 from unittest.mock import patch
 
-from src.core.schemas import NormalizedCV, CVExperience, CVSkills
-from src.core.sector_profiles import Criterion, SectorProfile
+from src.core.schemas import NormalizedCV, CVExperience
 from src.core.sector_registry import (
     ALL_PROFILES,
     GENERIC_PROFILE,
@@ -17,7 +16,7 @@ from src.core.sector_registry import (
     SECTORS,
     PROFILE_BY_SECTOR,
 )
-from src.services.sector_detector import SectorDetector, SectorDetectionResult, _CONFIDENCE_THRESHOLD
+from src.services.sector_detector import SectorDetector, _CONFIDENCE_THRESHOLD
 
 
 # ---------------------------------------------------------------------------

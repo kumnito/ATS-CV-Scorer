@@ -15,7 +15,6 @@ Usage :
 
 import csv
 import sys
-import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -26,10 +25,10 @@ from src.core.lexicons import init_lexicons
 
 init_lexicons()
 
-from src.services.cv_quality_scorer import CVQualityScorer
-from src.services.cv_transformer import CVTransformer
-from src.services.nlp_pipeline import NLPPipeline
-from src.services.sector_detector import SectorDetector
+from src.services.cv_quality_scorer import CVQualityScorer  # noqa: E402
+from src.services.cv_transformer import CVTransformer  # noqa: E402
+from src.services.nlp_pipeline import NLPPipeline  # noqa: E402
+from src.services.sector_detector import SectorDetector  # noqa: E402
 
 SAMPLE_DIR = Path(__file__).parent / "fixtures" / "sample_cvs"
 OUTPUT_CSV = Path(__file__).parent / "fixtures" / "benchmark_sectoriel.csv"
@@ -99,7 +98,6 @@ def run_benchmark(sample_dir: Path = SAMPLE_DIR) -> list[dict]:
     pdf_paths = sorted(sample_dir.glob("*.pdf"))
 
     for pdf_path in pdf_paths:
-        start = time.perf_counter()
         try:
             cv = transformer.transform(str(pdf_path))
             parsed_cv = nlp.parse_normalized(cv)

@@ -27,6 +27,9 @@ python-dotenv==1.0.1
 numpy<2.0
 scikit-learn==1.5.2
 
+# Experiment tracking — désactivé si MLFLOW_TRACKING_URI absent (mlflow-skinny = client seul, sans serveur)
+mlflow-skinny>=2.0
+
 # Lexicon builder — HuggingFace dataset source (make update-lexicons)
 datasets>=2.0
 

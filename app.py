@@ -1,6 +1,7 @@
 """Hugging Face Spaces entry point — Gradio interface for ATS CV Scorer."""
 
 import logging
+import time
 
 logging.basicConfig(level=logging.INFO, format="%(name)s | %(levelname)s | %(message)s")
 logger = logging.getLogger(__name__)
@@ -13,6 +14,7 @@ from src.core.config import settings
 from src.core.lexicons import init_lexicons
 from src.core.schemas import CVQualityReport, CriterionResult, NormalizedCV
 from src.services.claude_feedback import ClaudeBudgetExceeded, ClaudeFeedback, ClaudeServiceError
+from src.services.experiment_tracker import ExperimentTracker
 from src.services.cv_quality_scorer import CVQualityScorer
 from src.services.cv_transformer import CVTransformer
 from src.services.job_matcher import FRANCE_REGIONS, find_matching_jobs
@@ -50,6 +52,7 @@ _nlp_pipeline = NLPPipeline()
 _sector_detector = SectorDetector()
 _semantic_scorer = SemanticScorer()
 _cv_quality_scorer = CVQualityScorer()
+_experiment_tracker = ExperimentTracker()
 _providers = [
     AdzunaProvider(
         app_id=settings.adzuna_id,
@@ -873,6 +876,7 @@ def on_cv_upload(cv_file, vision_calls):
     if cv_file is None:
         return _reset
 
+    _t0 = time.perf_counter()
     allow_vision = vision_calls < MAX_VISION_CALLS_PER_SESSION
     normalized_cv = _cv_transformer.transform(cv_file.name, allow_vision=allow_vision)
     if normalized_cv.extraction_method == "vision_llm":
@@ -895,6 +899,17 @@ def on_cv_upload(cv_file, vision_calls):
     parsed_cv = _nlp_pipeline.parse_normalized(normalized_cv)
     sector_result = _sector_detector.detect(parsed_cv)
     quality_report = _cv_quality_scorer.score(parsed_cv, sector_result=sector_result)
+    _latency_ms = (time.perf_counter() - _t0) * 1000
+    try:
+        _experiment_tracker.log_cv_analysis(
+            sector_result=sector_result,
+            quality_report=quality_report,
+            extraction_method=normalized_cv.extraction_method,
+            latency_ms=_latency_ms,
+            word_count=normalized_cv.word_count,
+        )
+    except Exception:
+        pass
     cv_embedding = _semantic_scorer.encode_cv(normalized_cv.raw_text)
 
     # Phase C — AI criteria for undetected sectors

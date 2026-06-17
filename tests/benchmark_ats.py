@@ -187,6 +187,16 @@ def main() -> None:
     if rows:
         write_csv(rows)
         print(f"\nRapport CSV : {OUTPUT_CSV}")
+        from src.services.experiment_tracker import ExperimentTracker
+        ExperimentTracker().log_benchmark(
+            str(OUTPUT_CSV),
+            params={"allow_vision_llm": str(args.with_vision_llm)},
+            metrics={
+                "cv_count": float(len(rows)),
+                "avg_time_ms": round(sum(r["time_ms"] for r in rows) / len(rows), 1),
+                "error_count": float(sum(1 for r in rows if r["method"] == "error")),
+            },
+        )
 
 
 if __name__ == "__main__":

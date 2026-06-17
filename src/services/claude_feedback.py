@@ -170,4 +170,7 @@ Provide:
         except Exception:
             budget_guard.release()
             raise
+        if not response.content or not hasattr(response.content[0], "text"):
+            budget_guard.release()
+            raise ClaudeServiceError("Le service IA a renvoyé une réponse inattendue.")
         return response.content[0].text

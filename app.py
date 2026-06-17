@@ -525,6 +525,9 @@ def _generate_ai_criteria(job_title: str) -> list | None:
             max_tokens=600,
             messages=[{"role": "user", "content": prompt}],
         )
+        if not response.content or not hasattr(response.content[0], "text"):
+            budget_guard.release()
+            return None
         raw = response.content[0].text.strip()
         m = _re.search(r"\[.+\]", raw, _re.DOTALL)
         if not m:

@@ -347,16 +347,33 @@ _EMBEDDINGS_PATH = Path(__file__).parent.parent.parent / "lexicons_embeddings.np
 
 def _load_generated_embeddings(embedded_skills: list[str]) -> None:
     global GENERATED_SKILL_PHRASES, GENERATED_SKILL_EMBEDDINGS
-    if not embedded_skills or not _EMBEDDINGS_PATH.exists():
+    if not embedded_skills:
         return
+
+    # Fast path: load from cache.
+    if _EMBEDDINGS_PATH.exists():
+        try:
+            embeddings = np.load(_EMBEDDINGS_PATH)
+            if embeddings.shape[0] == len(embedded_skills):
+                GENERATED_SKILL_PHRASES = embedded_skills
+                GENERATED_SKILL_EMBEDDINGS = embeddings
+                return
+        except (OSError, ValueError):
+            pass  # Cache corrupt — recompute below.
+
+    # Cache absent or corrupt: encode with the shared MiniLM model.
+    # Persists the result so subsequent startups use the fast path.
     try:
-        embeddings = np.load(_EMBEDDINGS_PATH)
-    except (OSError, ValueError):
-        return
-    if embeddings.shape[0] != len(embedded_skills):
-        return
-    GENERATED_SKILL_PHRASES = embedded_skills
-    GENERATED_SKILL_EMBEDDINGS = embeddings
+        from src.core.model_registry import get_minilm
+        embeddings = get_minilm().encode(embedded_skills, convert_to_numpy=True)
+        try:
+            np.save(_EMBEDDINGS_PATH, embeddings)
+        except OSError:
+            pass  # Read-only filesystem — keep in-memory embeddings only.
+        GENERATED_SKILL_PHRASES = embedded_skills
+        GENERATED_SKILL_EMBEDDINGS = embeddings
+    except Exception:
+        pass  # sentence-transformers unavailable — skip semantic matching.
 
 
 def _merge_generated() -> tuple[list[str], list[str]]:

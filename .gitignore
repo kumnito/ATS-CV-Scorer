@@ -16,3 +16,5 @@ venv/
 !tests/fixtures/synth_two_columns_sidebar.pdf
 uploads/
 tests/fixtures/benchmark_report.csv
+# Généré au démarrage par init_lexicons() si absent (make update-lexicons pour forcer la mise à jour)
+lexicons_embeddings.npy

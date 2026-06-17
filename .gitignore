@@ -11,6 +11,9 @@ build/
 .venv/
 venv/
 *.pdf
+!tests/fixtures/sample_cv_ml_engineer_junior.pdf
+!tests/fixtures/synth_two_columns_simple.pdf
+!tests/fixtures/synth_two_columns_sidebar.pdf
 uploads/
 lexicons_generated.json
 lexicons_embeddings.npy

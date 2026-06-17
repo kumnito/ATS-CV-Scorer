@@ -298,7 +298,7 @@ make install        # dépendances runtime
 make install-dev    # + pytest, fpdf2, reportlab (tests + benchmark)
 make run            # UI Gradio → http://localhost:7860
 make dev            # API FastAPI → http://localhost:8000/docs
-make test           # 374 tests, 10 skippés (PDFs privés)
+make test           # 376 tests, 10 skippés (PDFs privés)
 make benchmark-sectoriel  # rapport CSV détection × scoring par CV
 make update-lexicons      # régénère lexicons_generated.json (voir ci-dessous)
 ```

@@ -129,7 +129,7 @@ PDF
 
 ## État actuel
 
-- **374 tests, 10 skippés** (PDFs privés `CV_kumnito_two_columns.pdf` et `CV-KEO-PEN.pdf` absents du repo).
+- **376 tests, 10 skippés** (PDFs privés `CV_kumnito_two_columns.pdf` et `CV-KEO-PEN.pdf` absents du repo).
 - **Benchmark sectoriel** : détection ≥ 80% sur le corpus de 15 CVs. `make benchmark-sectoriel` génère `tests/fixtures/benchmark_sectoriel.csv`.
 - **Déployé** : HF Spaces `voroman/ats-cv-scorer`, remote `hf`.
 
@@ -137,7 +137,6 @@ PDF
 
 | Dette | Impact | Effort |
 |---|---|---|
-| `quality_report_state` non mis à jour lors d'un override sectoriel | Le feedback Claude reçoit les critères de la détection originale, pas du profil forcé | Faible — appeler `CVQualityScorer.score()` dans `on_sector_override` + ajouter `quality_report_state` aux outputs |
-| Lexiques ESCO statiques (`lexicons_generated.json`) | Nouveaux métiers ESCO non propagés automatiquement | Moyen — `make update-lexicons` appelant `LexiconBuilder.build()` |
-| 10 tests skippés structurellement | Couverture layout 2 colonnes non régressée en CI | Faible — versionner les PDFs ou générer des fixtures synthétiques équivalentes |
+| Lexiques ESCO (`lexicons_generated.json` gitignorés) | Sur un déploiement frais HF Spaces, le matching sémantique ESCO se désactive silencieusement | Faible — `make update-lexicons` existe (depuis `ec683bf`), reste à clarifier le statut des fichiers générés au déploiement |
+| 10 tests skippés structurellement | Couverture layout 2 colonnes non régressée en CI | Faible — générer des fixtures synthétiques avec reportlab |
 | France Travail absent de `/find-jobs` API | Orchestrateur API : Adzuna + Jooble seulement | Faible — ajouter `FranceTravailProvider` à `_orchestrator` dans `server.py` |

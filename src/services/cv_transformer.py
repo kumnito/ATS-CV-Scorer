@@ -8,20 +8,15 @@ semantically-ordered text stream before NLP parsing.
 import concurrent.futures
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
 from typing import Optional
 
-from src.core.budget_guard import budget_guard
-from src.services.vision_extractor import VisionExtractor, build_raw_text, richness_score
-
-logger = logging.getLogger(__name__)
-
 import pdfplumber
 
+from src.core.budget_guard import budget_guard
+from src.core.config import settings
 from src.core.lexicons import (
-    ACTION_VERBS_EN,
-    ACTION_VERBS_FR,
     JOB_TITLE_RE,
     METRIC_PATTERNS,
     POSTAL_CODE_CITY_RE,
@@ -29,7 +24,6 @@ from src.core.lexicons import (
     SKILL_CATEGORIES,
     TITLE_SPLIT_RE,
 )
-from src.core.config import settings
 from src.core.schemas import (
     CVEducation,
     CVExperience,
@@ -39,6 +33,9 @@ from src.core.schemas import (
     NormalizedCV,
 )
 from src.services.semantic_skill_matcher import match_semantic_skills
+from src.services.vision_extractor import VisionExtractor, build_raw_text, richness_score
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -367,15 +364,15 @@ class CVTransformer:
         # section lines. "Top of page" = lines whose top is below the 12th
         # percentile of all line tops — empirically covers the name/title area.
         if layout_info.layout_type == "two_columns" and lines:
-            sorted_tops = sorted(l.top for l in lines)
+            sorted_tops = sorted(ln.top for ln in lines)
             top_threshold = sorted_tops[max(0, int(len(sorted_tops) * 0.12))]
             header_lines_for_parsing = list(section_map.get("header", []))
-            seen_ids = {id(l) for l in header_lines_for_parsing}
-            for l in lines:
-                if l.top <= top_threshold and id(l) not in seen_ids:
-                    header_lines_for_parsing.append(l)
-                    seen_ids.add(id(l))
-            header_lines_for_parsing.sort(key=lambda l: l.top)
+            seen_ids = {id(ln) for ln in header_lines_for_parsing}
+            for ln in lines:
+                if ln.top <= top_threshold and id(ln) not in seen_ids:
+                    header_lines_for_parsing.append(ln)
+                    seen_ids.add(id(ln))
+            header_lines_for_parsing.sort(key=lambda ln: ln.top)
         else:
             header_lines_for_parsing = section_map.get("header", [])
 
@@ -390,15 +387,15 @@ class CVTransformer:
         if not summary:
             _hdr_lines = section_map.get("header", [])
             _accroche = [
-                l for l in _hdr_lines
-                if len(l.text.strip()) > 60
-                and len(l.text.split()) > 8
-                and not _EMAIL_RE.search(l.text)
-                and not _PHONE_RE.search(l.text)
-                and not _GITHUB_RE.search(l.text)
-                and not _LINKEDIN_RE.search(l.text)
-                and not _URL_RE.search(l.text)
-                and not POSTAL_CODE_CITY_RE.search(l.text)
+                ln for ln in _hdr_lines
+                if len(ln.text.strip()) > 60
+                and len(ln.text.split()) > 8
+                and not _EMAIL_RE.search(ln.text)
+                and not _PHONE_RE.search(ln.text)
+                and not _GITHUB_RE.search(ln.text)
+                and not _LINKEDIN_RE.search(ln.text)
+                and not _URL_RE.search(ln.text)
+                and not POSTAL_CODE_CITY_RE.search(ln.text)
             ]
             summary = _lines_to_raw_text(_accroche).strip() or None
 
@@ -470,13 +467,13 @@ class CVTransformer:
         summary = _lines_to_raw_text(section_map.get("summary", [])).strip() or None
         if not summary:
             _hdr = [
-                l for l in section_map.get("header", [])
-                if len(l.text.strip()) > 60
-                and len(l.text.split()) > 8
-                and not _EMAIL_RE.search(l.text)
-                and not _PHONE_RE.search(l.text)
-                and not _GITHUB_RE.search(l.text)
-                and not _LINKEDIN_RE.search(l.text)
+                ln for ln in section_map.get("header", [])
+                if len(ln.text.strip()) > 60
+                and len(ln.text.split()) > 8
+                and not _EMAIL_RE.search(ln.text)
+                and not _PHONE_RE.search(ln.text)
+                and not _GITHUB_RE.search(ln.text)
+                and not _LINKEDIN_RE.search(ln.text)
             ]
             summary = _lines_to_raw_text(_hdr).strip() or None
 
@@ -651,15 +648,14 @@ class CVTransformer:
                     continue
             buckets.setdefault(current, []).append(line)
 
-        return {k: v for k, v in buckets.items() if any(l.text.strip() for l in v)}
+        return {k: v for k, v in buckets.items() if any(ln.text.strip() for ln in v)}
 
     # ------------------------------------------------------------------
     # Step 5 — Parse each section into structured objects
     # ------------------------------------------------------------------
 
     def _parse_header(self, lines: list[_Line]) -> CVHeader:
-        full_text = " ".join(l.text for l in lines)
-        all_text = "\n".join(l.text for l in lines)
+        all_text = "\n".join(ln.text for ln in lines)
 
         email = _first_match(_EMAIL_RE, all_text)
         phone = _first_match(_PHONE_RE, all_text)
@@ -673,8 +669,8 @@ class CVTransformer:
 
         # Name: largest-size non-empty line (typically the very first big text)
         name_line = max(
-            (l for l in lines if l.text.strip() and not _EMAIL_RE.search(l.text) and not _PHONE_RE.search(l.text)),
-            key=lambda l: l.max_size,
+            (ln for ln in lines if ln.text.strip() and not _EMAIL_RE.search(ln.text) and not _PHONE_RE.search(ln.text)),
+            key=lambda ln: ln.max_size,
             default=None,
         )
         name = name_line.text.strip() if name_line else None
@@ -687,14 +683,14 @@ class CVTransformer:
             opp_col = "right" if name_line.column == "left" else "left"
             complement = next(
                 (
-                    l for l in lines
-                    if l.column == opp_col
-                    and abs(l.top - name_line.top) <= 15
-                    and l.text.strip()
-                    and not _EMAIL_RE.search(l.text)
-                    and not _PHONE_RE.search(l.text)
-                    and not _GITHUB_RE.search(l.text)
-                    and not _LINKEDIN_RE.search(l.text)
+                    ln for ln in lines
+                    if ln.column == opp_col
+                    and abs(ln.top - name_line.top) <= 15
+                    and ln.text.strip()
+                    and not _EMAIL_RE.search(ln.text)
+                    and not _PHONE_RE.search(ln.text)
+                    and not _GITHUB_RE.search(ln.text)
+                    and not _LINKEDIN_RE.search(ln.text)
                 ),
                 None,
             )
@@ -705,8 +701,8 @@ class CVTransformer:
 
         # Title: first non-name line matching a job title keyword
         title = None
-        for l in lines:
-            t = l.text.strip()
+        for ln in lines:
+            t = ln.text.strip()
             if not t or t == name:
                 continue
             if _EMAIL_RE.search(t) or _PHONE_RE.search(t) or _GITHUB_RE.search(t) or _LINKEDIN_RE.search(t):
@@ -794,19 +790,19 @@ class CVTransformer:
         for entry_lines in entries:
             if not entry_lines:
                 continue
-            text = " ".join(l.text for l in entry_lines)
+            text = " ".join(ln.text for ln in entry_lines)
             name = entry_lines[0].text.strip()
             bullets = [
-                _BULLET_RE.sub("", l.text).strip()
-                for l in entry_lines[1:]
-                if _BULLET_RE.match(l.text)
+                _BULLET_RE.sub("", ln.text).strip()
+                for ln in entry_lines[1:]
+                if _BULLET_RE.match(ln.text)
             ]
             url_m = _URL_RE.search(text)
             url = url_m.group(0) if url_m else None
             metrics = [
-                l.text.strip()
-                for l in entry_lines
-                if any(p.search(l.text) for p in METRIC_PATTERNS)
+                ln.text.strip()
+                for ln in entry_lines
+                if any(p.search(ln.text) for p in METRIC_PATTERNS)
             ]
             projects.append(
                 CVProject(
@@ -821,9 +817,9 @@ class CVTransformer:
 
     def _parse_language_list(self, lines: list[_Line]) -> list[str]:
         langs: list[str] = []
-        for l in lines:
+        for ln in lines:
             # Each non-empty line is a language entry; strip bullet chars
-            t = _BULLET_RE.sub("", l.text).strip()
+            t = _BULLET_RE.sub("", ln.text).strip()
             if t and len(t) < 60:
                 langs.append(t)
         return langs
@@ -865,14 +861,14 @@ def _words_to_line(words: list[dict], column: str) -> _Line:
 
 
 def _lines_to_raw_text(lines: list[_Line]) -> str:
-    raw = "\n".join(l.text for l in lines)
+    raw = "\n".join(ln.text for ln in lines)
     raw = re.sub(r"[ \t]+", " ", raw)
     raw = re.sub(r"\n{3,}", "\n\n", raw)
     return raw.strip()
 
 
 def _estimate_body_size(lines: list[_Line]) -> float:
-    sizes = [l.max_size for l in lines if l.text.strip() and l.max_size > 0]
+    sizes = [ln.max_size for ln in lines if ln.text.strip() and ln.max_size > 0]
     if not sizes:
         return 10.0
     # Mode: most frequent size
@@ -1038,13 +1034,13 @@ def _split_by_blank_or_bold(lines: list[_Line]) -> list[list[_Line]]:
     """Split a list of lines into chunks separated by blank lines or bold lines."""
     chunks: list[list[_Line]] = []
     current: list[_Line] = []
-    for l in lines:
-        if not l.text.strip():
+    for ln in lines:
+        if not ln.text.strip():
             if current:
                 chunks.append(current)
                 current = []
         else:
-            current.append(l)
+            current.append(ln)
     if current:
         chunks.append(current)
     return chunks
@@ -1060,7 +1056,7 @@ def _parse_timed_entries(lines: list[_Line], is_education: bool = False) -> list
     # Taille de corps locale : mode des tailles non nulles de toutes les lignes.
     # Utilisée pour distinguer les vrais en-têtes typographiques (taille > 1.2×corps)
     # des noms d'entreprises bold mais de taille normale.
-    _sizes = [round(l.max_size, 1) for l in lines if l.text.strip() and l.max_size > 0]
+    _sizes = [round(ln.max_size, 1) for ln in lines if ln.text.strip() and ln.max_size > 0]
     _body_size = Counter(_sizes).most_common(1)[0][0] if _sizes else 10.0
     _header_size_threshold = _body_size * 1.2
 
@@ -1073,7 +1069,7 @@ def _parse_timed_entries(lines: list[_Line], is_education: bool = False) -> list
         entry = _build_entry(entry_lines)
         # Filtrer les blocs parasites : prénom/nom isolé, fragment sans date ni
         # bullets (ex : "PEN", "professionnelles", ligne unique d'outil).
-        total_words = sum(len(l.text.split()) for l in entry_lines)
+        total_words = sum(len(ln.text.split()) for ln in entry_lines)
         if total_words < 3 and not entry.date_start and not entry.duration_months and not entry.bullets:
             entry_lines.clear()
             return
@@ -1088,7 +1084,7 @@ def _parse_timed_entries(lines: list[_Line], is_education: bool = False) -> list
         # A date-containing non-bullet short line signals a new entry or date boundary
         if _contains_date(t) and not _is_bullet(t) and len(t) < 100:
             # If there's already a date in current entry, start new entry
-            current_has_date = any(_contains_date(l.text) for l in entry_lines)
+            current_has_date = any(_contains_date(ln.text) for ln in entry_lines)
             if current_has_date and entry_lines:
                 flush()
             entry_lines.append(line)

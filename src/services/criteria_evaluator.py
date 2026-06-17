@@ -5,7 +5,6 @@ Scores are binary: 100 (met) or 0 (not met).
 Unknown detection_fn → score=0, graceful degradation (no exception).
 """
 
-import re
 from typing import Callable
 
 from src.core.lexicons import METRIC_PATTERNS
@@ -216,7 +215,6 @@ def evaluate_criteria(
     Graceful degradation: unknown detection_fn → score=0, no exception.
     """
     from src.core.sector_registry import ALL_PROFILES, GENERIC_PROFILE  # deferred
-    from src.services.sector_detector import SectorDetectionResult  # deferred
 
     profile = ALL_PROFILES.get(sector_result.profile_id) or GENERIC_PROFILE
     results: list[CriterionResult] = []

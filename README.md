@@ -147,7 +147,7 @@ flowchart TD
 | Feedback IA | Anthropic Claude (`claude-sonnet-4-6`) · prompt sectoriel · réponse FR |
 | Recherche d'offres | `JobSearchOrchestrator` — Adzuna, Jooble, France Travail (OAuth2) |
 | API REST | FastAPI `v0.3.0` — `/score`, `/find-jobs`, `/health` |
-| UI | Gradio 4.44 — 2 onglets, thème Tech Dashboard custom |
+| UI | Gradio 4.44 — 2 onglets, thème Tech Dashboard custom, pipeline diagram animé |
 | Déploiement | Hugging Face Spaces (Docker, Python 3.12) |
 
 ---
@@ -169,7 +169,7 @@ Cascade de confiance (confidence = `min(1.0, word_count / 450)`) :
 **2. NLP — NLPPipeline**
 
 - `job_title` : regex `JOB_TITLE_KEYWORDS` (200+ métiers FR/EN) sur les premières lignes du header.
-- `location` : code postal FR 5 chiffres + ville (regex `POSTAL_CODE_CITY_RE`) → fallback NER filtré avec `LOCATION_BLOCKLIST` (langues, mots génériques).
+- `location` : cascade `POSTAL_FIRST_RE` (code-avant-ville, ex. `59170 Croix`) → `POSTAL_CODE_CITY_RE` (ville-avant, ex. `Croix, 59170`) → NER filtré (`LOCATION_BLOCKLIST` + `STREET_TOKENS`). Même priorité dans `CVTransformer`. Évite les faux positifs sur les noms de rues (ex. `Jean Jaurès`).
 - `skills_flat` : regex pré-compilée `ALL_SKILLS_RE` sur `raw_text` (union des lexiques catégorisés ML / MLOps / Cloud / Data / Langages / Commerce / Autres).
 - `sector` : scan `SECTOR_KEYWORDS` sur le texte des expériences (titre + company + bullets).
 
@@ -274,6 +274,7 @@ Réponse : `list[RankedJobMatch]` (job + scoring_result, triés par score décro
 
 Thème custom `gr.themes.Base` (indigo/slate, Inter + JetBrains Mono) + CSS injecté :
 
+- **Pipeline diagram animé** — schéma 7 blocs rendu une seule fois, mis à jour via `MutationObserver` (bridge JS injecté dans `<head>`). Connecteurs SVG `stroke-dashoffset` animés 2s/étape, transitions CSS fluides sans remplacement DOM (zero clignotement).
 - **Metric cards** — 4 cards horizontales (Lisibilité ATS, Score profil, Mots-clés, Expérience) + badge méthode extraction.
 - **Secteur détecté** — card avec profil, confiance, badges alternatives, dropdown correction manuelle.
 - **Critères adaptatifs** — grille des critères du profil détecté (✅ / ❌, poids, evidence).
@@ -298,7 +299,7 @@ make install        # dépendances runtime
 make install-dev    # + pytest, fpdf2, reportlab (tests + benchmark)
 make run            # UI Gradio → http://localhost:7860
 make dev            # API FastAPI → http://localhost:8000/docs
-make test           # 376 tests, 10 skippés (PDFs privés)
+make test           # 396 tests, 10 skippés (PDFs privés)
 make benchmark-sectoriel  # rapport CSV détection × scoring par CV
 make update-lexicons      # régénère lexicons_generated.json (voir ci-dessous)
 ```

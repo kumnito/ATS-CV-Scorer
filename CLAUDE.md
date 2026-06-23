@@ -53,6 +53,9 @@ src/
       orchestrator.py      — JobSearchOrchestrator (fan-out parallèle)
   api/
     server.py              — FastAPI : /score (pipeline complet), /find-jobs, /health
+  ui/
+    pipeline_diagram.py    — schéma pipeline animé (HTML/CSS/SVG) + BRIDGE_JS
+                             get_pipeline_html() rendu unique · get_stage_signal() canal JS
 app.py                     — UI Gradio (point d'entrée HF Spaces)
 tests/
   test_*.py                — un fichier par service, mocks httpx.MockTransport
@@ -64,7 +67,8 @@ tests/
 
 ## Conventions
 
-- `make lint` / `make format` couvrent `src/` et `tests/` uniquement — **pas `app.py`** (code legacy non formaté par ruff).
+- `make lint` / `make format` couvrent `src/` et `tests/` uniquement — **pas `app.py`** (code legacy non formaté par ruff). `src/ui/` est couvert.
+- **Bridge JS pipeline diagram** : injecter du JS persistant via `gr.Blocks(head=f"<script>{JS}</script>")`, **jamais** `gr.Blocks(js=...)` — le paramètre `js=` en Gradio 4.44 passe le code via `new Function()` et brise silencieusement les event handlers (aucun upload ne fonctionne).
 - Secrets : `.env` (jamais commité), `.env.example` reste vide. **Ne jamais afficher la valeur d'un secret** (`cut -d'=' -f1` pour vérifier la présence, jamais `cat`/`grep` sur les valeurs).
 - pydantic-settings mappe `nom_du_champ` ↔ `NOM_DU_CHAMP` (insensible à la casse, sans préfixe).
 - Réponses Claude forcées en français via `_SYSTEM_PROMPT` (`claude_feedback.py`).
@@ -120,7 +124,8 @@ PDF
 
 ## Pitfalls connus
 
-- **`en_core_web_sm` sur texte FR** : NER GPE/LOC produit des faux positifs (noms de langues, adjectifs). Solution : `LOCATION_BLOCKLIST` + regex `POSTAL_CODE_CITY_RE` prioritaire.
+- **`en_core_web_sm` sur texte FR** : NER GPE/LOC produit des faux positifs (noms de langues, noms de rues). Solution : cascade `_cascade_location()` dans `nlp_pipeline.py` : `POSTAL_FIRST_RE` (code-avant-ville) → `POSTAL_CODE_CITY_RE` (ville-avant) → NER filtré (`LOCATION_BLOCKLIST` + `STREET_TOKENS`). Même priorité appliquée dans `cv_transformer._extract_location_from_text()`. **`POSTAL_CODE_CITY_RE` seul ne suffit pas** : il matche "Jean Jaurès, 59170" avant "59170 Croix" — toujours essayer `POSTAL_FIRST_RE` en premier.
+- **`gr.Blocks(js=...)` Gradio 4.44** : brise silencieusement les event handlers (aucun upload ne fonctionne). Utiliser `head=f"<script>{JS}</script>"` à la place.
 - **Adzuna géocode mal les petites villes** : utiliser le code postal (`"59170 Croix"` au lieu de `"Croix"`). La région manuelle Gradio prend toujours la priorité sur la localisation CV.
 - **`job_title` bruité** : le champ peut contenir nom, téléphone, email. Le n-gram windowing (2–4 mots) dans `_compute_title_scores` permet d'extraire "devops engineer" d'une chaîne bruitée.
 - **France Travail OAuth2** : l'application francetravail.io doit être **abonnée** à l'API "Offres d'emploi v2" (souscription distincte de la création de l'app). Sinon : `invalid_client` sur le token endpoint même avec des credentials valides.
@@ -129,9 +134,10 @@ PDF
 
 ## État actuel
 
-- **376 tests, 10 skippés** (PDFs privés `CV_kumnito_two_columns.pdf` et `CV-KEO-PEN.pdf` absents du repo).
+- **396 tests, 10 skippés** (PDFs privés `CV_kumnito_two_columns.pdf` et `CV-KEO-PEN.pdf` absents du repo).
 - **Benchmark sectoriel** : détection ≥ 80% sur le corpus de 15 CVs. `make benchmark-sectoriel` génère `tests/fixtures/benchmark_sectoriel.csv`.
 - **Déployé** : HF Spaces `voroman/ats-cv-scorer`, remote `hf`.
+- **Pipeline diagram animé** : `src/ui/pipeline_diagram.py` — schéma 7 blocs + connecteurs SVG `stroke-dashoffset` (animation draw 2s/étape). Bridge `MutationObserver` injecté via `head=<script>` pour transitions CSS zero-clignotement. Schéma rendu une seule fois (yield 1), JS mis à jour via `stage_signal_html` caché.
 
 ## Dette technique résiduelle
 

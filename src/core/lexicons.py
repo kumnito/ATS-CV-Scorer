@@ -272,6 +272,10 @@ _CITY = r"([A-ZÀ-Ý][\wà-öù-ÿ'-]*(?:[ \t-][A-ZÀ-Ý][\wà-öù-ÿ'-]*)*)"
 POSTAL_CODE_CITY_RE = re.compile(
     rf"(?:{_PC}[ \t,–—-]*{_CITY}|{_CITY}[ \t]*,[ \t]*{_PC})"
 )
+# Postal-first only variant: "59170 Croix" — more reliable than the combined
+# regex because the city-first alternative can consume street names as "cities"
+# (e.g. "Jean Jaurès, 59170" matches before "59170 Croix").
+POSTAL_FIRST_RE = re.compile(rf"{_PC}[ \t,–—-]*{_CITY}")
 
 TITLE_SPLIT_RE = re.compile(r"\s+[-–—,]\s+|\s*\|\s*")
 
@@ -293,6 +297,9 @@ LOCATION_BLOCKLIST: frozenset[str] = frozenset({
     # Generic words that appear capitalised in CV headers
     "contact", "email", "adresse", "téléphone", "linkedin", "github",
     "mobile", "permis",
+    # Street-adjacent proper nouns common in French addresses (frequent false positives)
+    "jaurès", "jean jaurès", "gambetta", "clemenceau", "foch",
+    "de gaulle", "pasteur", "victor hugo", "napoleon",
 })
 
 # Regex patterns for metric/quantified achievement detection

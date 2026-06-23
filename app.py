@@ -26,6 +26,7 @@ from src.services.nlp_pipeline import NLPPipeline
 from src.services.sector_detector import SectorDetectionResult, SectorDetector
 from src.services.semantic_scorer import SemanticScorer
 from src.core.sector_registry import ALL_PROFILES, PROFILE_BY_SECTOR, SECTOR_DISPLAY_NAMES
+from src.ui.pipeline_diagram import BRIDGE_JS, get_pipeline_html, get_stage_signal
 
 
 def _patch_gradio_client_bool_schema() -> None:
@@ -356,6 +357,15 @@ CUSTOM_CSS = """
     color: var(--app-badge-text);
     align-self: center;
     white-space: nowrap;
+}
+
+.quality-section-header {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--app-text-secondary);
+    margin-bottom: 6px;
 }
 """
 
@@ -688,46 +698,8 @@ def _format_skill_badges(cv: NormalizedCV) -> str:
 
 
 def _format_quality_report(cv: NormalizedCV, report: CVQualityReport) -> str:
-    ats = report.ats_readability
-    ps = report.profile_strength
+    lines: list[str] = []
 
-    sections_str = " · ".join(ats.sections_found) if ats.sections_found else "—"
-    readability_label = "✅ Oui" if ats.is_machine_readable else f"⚠️ Non ({cv.word_count} mots < 150)"
-
-    table_rows = [
-        f"| Format | {ats.layout_label} |",
-        f"| Sections trouvées | ✅ {sections_str} |",
-    ]
-    if ats.sections_missing:
-        table_rows.append(f"| Sections manquantes | ❌ {' · '.join(ats.sections_missing)} |")
-    table_rows.append(f"| Lisibilité machine | {readability_label} |")
-
-    lines = [
-        "## 📋 Lisibilité ATS",
-        "",
-        "| Critère | Statut |",
-        "|---|---|",
-        *table_rows,
-        "",
-    ]
-
-    # Solidité du profil
-    level_emoji = {"Solide": "🟢", "Correct": "🟡", "À renforcer": "🔴"}.get(ps.level, "")
-    lines += [
-        f"## 💼 Solidité du profil — {level_emoji} {ps.level}",
-        _progress_bar_html("Profil", ps.score, color=_score_color_hex(ps.score)),
-        "",
-    ]
-    if ps.strengths:
-        lines.append("✅ **Points forts**")
-        lines.extend(f"- {s}" for s in ps.strengths)
-        lines.append("")
-    if ps.improvements:
-        lines.append("💡 **À améliorer**")
-        lines.extend(f"- {imp}" for imp in ps.improvements)
-        lines.append("")
-
-    # Recommandations prioritaires
     if report.career_gaps:
         lines += ["### ⚠️ Trous de carrière détectés"]
         lines.extend(f"- {gap}" for gap in report.career_gaps)
@@ -764,7 +736,57 @@ def _format_metrics_html(cv: NormalizedCV, report: CVQualityReport) -> str:
         _metric_card("Mots-clés", f"{density}%", f"{skills_count} skills"),
         _metric_card("Expérience", exp_value, exp_sub),
     ]
-    return _extraction_badge_html(report) + f'<div class="metrics-grid">{"".join(cards)}</div>'
+    cards_html = (
+        _extraction_badge_html(report)
+        + f'<div class="metrics-grid">{"".join(cards)}</div>'
+    )
+    return (
+        '<div class="result-card" style="margin-bottom:0">'
+        '<div class="quality-section-header">Vue d\'ensemble</div>'
+        + cards_html
+        + "</div>"
+    )
+
+
+def _format_ats_section(cv: NormalizedCV, report: CVQualityReport) -> str:
+    ats = report.ats_readability
+    ps = report.profile_strength
+
+    sections_str = " · ".join(ats.sections_found) if ats.sections_found else "—"
+    readable_label = (
+        "✅ Oui" if ats.is_machine_readable
+        else f"⚠️ Non ({cv.word_count} mots < 150)"
+    )
+    level_emoji = {"Solide": "🟢", "Correct": "🟡", "À renforcer": "🔴"}.get(ps.level, "")
+
+    def _row(label: str, value: str) -> str:
+        return (
+            '<div style="display:flex;justify-content:space-between;'
+            'align-items:baseline;padding:5px 0;'
+            'border-bottom:0.5px solid var(--app-border);font-size:13px">'
+            f'<span style="color:var(--app-text-secondary)">{label}</span>'
+            f"<span>{value}</span>"
+            "</div>"
+        )
+
+    rows = [
+        _row("Format", ats.layout_label),
+        _row("Sections trouvées", f"✅ {sections_str}"),
+    ]
+    if ats.sections_missing:
+        rows.append(_row("Sections manquantes", f'❌ {" · ".join(ats.sections_missing)}'))
+    rows.append(_row("Lisibilité machine", readable_label))
+
+    bar = _progress_bar_html(
+        f"{level_emoji} {ps.level}", ps.score, color=_score_color_hex(ps.score)
+    )
+    return (
+        '<div class="result-card" style="margin-bottom:0">'
+        '<div class="quality-section-header">Compatibilité ATS</div>'
+        + "".join(rows)
+        + f'<div style="margin-top:12px">{bar}</div>'
+        + "</div>"
+    )
 
 
 def _timeline_entry_html(dot_color: str, title: str, meta: str, badge: str = "") -> str:
@@ -871,11 +893,28 @@ def on_cv_upload(cv_file, vision_calls):
         "", "",                                               # metrics_html, skills_html
         *_PHASE_C_RESET,                                      # sector_detection_html, sector_criteria_html,
                                                               # sector_override_dropdown, sector_result_state, ai_criteria_state
+        get_pipeline_html(active_stage=None),                 # pipeline_diagram_html
+        "",                                                   # stage_signal_html
     )
 
     if cv_file is None:
-        return _reset
+        yield _reset
+        return
 
+    # ── yield 1 : rendu unique du schéma + signal "extract" ──────────
+    yield (
+        "", "", "",
+        None, None, None,
+        "⚠️ Uploadez votre CV en onglet 1 pour commencer.",
+        gr.update(interactive=False),
+        gr.update(value=""),
+        vision_calls, None, "", "",
+        *_PHASE_C_RESET,
+        get_pipeline_html(active_stage="extract"),   # rendu une seule fois
+        get_stage_signal("extract"),                 # JS bridge → cv01 animation
+    )
+
+    # ── Traitement 1 : extraction PDF ────────────────────────────────
     _t0 = time.perf_counter()
     allow_vision = vision_calls < MAX_VISION_CALLS_PER_SESSION
     normalized_cv = _cv_transformer.transform(cv_file.name, allow_vision=allow_vision)
@@ -883,22 +922,72 @@ def on_cv_upload(cv_file, vision_calls):
         vision_calls += 1
 
     if not normalized_cv.raw_text:
-        return (
+        yield (
             "❌ Impossible d'extraire le texte du PDF.",
             "", "",
             None, None, None,
             "❌ Échec de l'extraction PDF — vérifiez que le fichier n'est pas protégé.",
             gr.update(interactive=False),
             gr.update(value=""),
-            vision_calls,
-            None,
-            "", "",
+            vision_calls, None, "", "",
             *_PHASE_C_RESET,
+            get_pipeline_html(active_stage=None),    # remasquer le schéma
+            "",
         )
+        return
 
+    # ── yield 2 : signal "nlp" → JS transition cv12 ─────────────────
+    yield (
+        "", "", "",
+        None, None, None,
+        "⚠️ Uploadez votre CV en onglet 1 pour commencer.",
+        gr.update(interactive=False),
+        gr.update(value=""),
+        vision_calls, None, "", "",
+        *_PHASE_C_RESET,
+        gr.update(),                                 # schéma intact, pas de remplacement
+        get_stage_signal("nlp"),
+    )
+
+    # ── Traitement 2 : NLP (+ garantie 2s pour l'animation cv-12) ───
+    _t_step = time.perf_counter()
     parsed_cv = _nlp_pipeline.parse_normalized(normalized_cv)
+    time.sleep(max(0.0, 2.0 - (time.perf_counter() - _t_step)))
+
+    # ── yield 3 : signal "sector" → JS transition fork-in ───────────
+    yield (
+        "", "", "",
+        None, None, None,
+        "⚠️ Uploadez votre CV en onglet 1 pour commencer.",
+        gr.update(interactive=False),
+        gr.update(value=""),
+        vision_calls, None, "", "",
+        *_PHASE_C_RESET,
+        gr.update(),
+        get_stage_signal("sector"),
+    )
+
+    # ── Traitement 3 : secteur + qualité (+ garantie 2s fork-in) ────
+    _t_step = time.perf_counter()
     sector_result = _sector_detector.detect(parsed_cv)
     quality_report = _cv_quality_scorer.score(parsed_cv, sector_result=sector_result)
+    time.sleep(max(0.0, 2.0 - (time.perf_counter() - _t_step)))
+
+    # ── yield 4 : signal "quality" → JS transition fork-out ─────────
+    yield (
+        "", "", "",
+        None, None, None,
+        "⚠️ Uploadez votre CV en onglet 1 pour commencer.",
+        gr.update(interactive=False),
+        gr.update(value=""),
+        vision_calls, None, "", "",
+        *_PHASE_C_RESET,
+        gr.update(),
+        get_stage_signal("quality"),
+    )
+
+    # ── Traitements finaux (+ garantie 2s pour l'animation fork-out) ─
+    _t_step = time.perf_counter()
     _latency_ms = (time.perf_counter() - _t0) * 1000
     try:
         _experiment_tracker.log_cv_analysis(
@@ -932,7 +1021,10 @@ def on_cv_upload(cv_file, vision_calls):
     if not allow_vision and normalized_cv.extraction_confidence < 0.85:
         quality_md += f"\n\n---\n\n{_DEMO_LIMIT_MD}"
 
-    return (
+    time.sleep(max(0.0, 2.0 - (time.perf_counter() - _t_step)))
+
+    # ── yield final : résultats complets ────────────────────────────
+    yield (
         quality_md,
         _format_timeline(normalized_cv, quality_report),
         _format_profile_summary(parsed_cv, normalized_cv),
@@ -949,9 +1041,11 @@ def on_cv_upload(cv_file, vision_calls):
         # Phase C outputs:
         _format_sector_detection_html(sector_result, ai_badge=ai_badge),
         criteria_html,
-        gr.update(value=None),   # reset sector dropdown
+        gr.update(value=None),
         sector_result,
         ai_criteria,
+        gr.update(),                   # schéma intact — JS bridge gère l'état done
+        get_stage_signal("done"),
     )
 
 
@@ -966,6 +1060,8 @@ def on_cv_clear():
         None,
         "", "",
         *_PHASE_C_RESET,
+        get_pipeline_html(active_stage=None),
+        "",
     )
 
 
@@ -1218,6 +1314,7 @@ with gr.Blocks(
     title="ATS CV Scorer",
     theme=THEME,
     css=CUSTOM_CSS,
+    head=f"<script>{BRIDGE_JS}</script>",
 ) as demo:
     gr.Markdown("# 📋 ATS CV Scorer")
 
@@ -1232,6 +1329,7 @@ with gr.Blocks(
     # Phase C
     sector_result_state = gr.State(None)
     ai_criteria_state = gr.State(None)
+    pipeline_stage_state = gr.State(None)
 
     with gr.Tabs():
 
@@ -1242,6 +1340,15 @@ with gr.Blocks(
                 "lisibilité parseur, solidité du profil, timeline carrière et actions prioritaires. "
                 "Aucun appel réseau externe n'est déclenché à cette étape."
             )
+            pipeline_diagram_html = gr.HTML(
+                value=get_pipeline_html(active_stage=None),
+                elem_id="pipeline-diagram",
+            )
+            stage_signal_html = gr.HTML(
+                value="",
+                elem_id="ats-stage-signal",
+                visible=False,
+            )
             with gr.Row():
                 with gr.Column(scale=1):
                     cv_input = gr.File(
@@ -1249,8 +1356,9 @@ with gr.Blocks(
                     )
                     profile_md = gr.Markdown()
                     skills_html = gr.HTML()
-                with gr.Column(scale=2):
+                with gr.Column(scale=3):
                     metrics_html = gr.HTML()
+                    ats_section_html = gr.HTML()
                     quality_md = gr.Markdown()
                     timeline_md = gr.Markdown()
 
@@ -1350,6 +1458,8 @@ with gr.Blocks(
         sector_override_dropdown,
         sector_result_state,
         ai_criteria_state,
+        pipeline_diagram_html,
+        stage_signal_html,
     ]
 
     cv_input.upload(

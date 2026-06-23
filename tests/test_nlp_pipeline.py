@@ -339,3 +339,50 @@ def test_parse_normalized_sets_sector_field(pipeline):
     )
     parsed = pipeline.parse_normalized(cv)
     assert parsed.sector == "magasin"
+
+
+# ---------------------------------------------------------------------------
+# Extraction de localisation — cascade postal → NER (2026-06-23)
+# ---------------------------------------------------------------------------
+
+
+def test_location_extracts_city_from_postal_code(pipeline):
+    """Code postal + ville dans raw_text → ville extraite, code postal stocké."""
+    from src.core.schemas import CVHeader, NormalizedCV
+
+    raw = "314/1 rue Jean Jaurès, 59170 Croix\nMachine Learning Engineer"
+    cv = NormalizedCV(raw_text=raw, header=CVHeader(name="Kumnito PEN"))
+    parsed = pipeline.parse_normalized(cv)
+    assert parsed.location == "Croix"
+    assert parsed.postal_code == "59170"
+
+
+def test_location_rejects_street_name(pipeline):
+    """Nom de rue sans code postal — ne doit pas être retourné comme ville."""
+    from src.core.schemas import CVHeader, NormalizedCV
+
+    raw = "314/1 rue Jean Jaurès\nMachine Learning Engineer"
+    cv = NormalizedCV(raw_text=raw, header=CVHeader(name="Kumnito PEN"))
+    parsed = pipeline.parse_normalized(cv)
+    assert parsed.location != "Jean Jaurès"
+    assert parsed.location != "Jaurès"
+
+
+def test_location_city_without_postal(pipeline):
+    """Ville connue (GPE spaCy) sans code postal — doit être retournée."""
+    from src.core.schemas import CVHeader, NormalizedCV
+
+    raw = "Machine Learning Engineer\nParis\nPython Expert"
+    cv = NormalizedCV(raw_text=raw, header=CVHeader(name="John Doe"))
+    parsed = pipeline.parse_normalized(cv)
+    assert parsed.location == "Paris"
+
+
+def test_location_hyphenated_city(pipeline):
+    """Ville composée avec trait d'union — extraite correctement."""
+    from src.core.schemas import CVHeader, NormalizedCV
+
+    raw = "42000 Saint-Étienne\nDéveloppeur Python"
+    cv = NormalizedCV(raw_text=raw, header=CVHeader(name="Martin Dupont"))
+    parsed = pipeline.parse_normalized(cv)
+    assert parsed.location == "Saint-Étienne"

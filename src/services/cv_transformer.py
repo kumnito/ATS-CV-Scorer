@@ -20,6 +20,7 @@ from src.core.lexicons import (
     JOB_TITLE_RE,
     METRIC_PATTERNS,
     POSTAL_CODE_CITY_RE,
+    POSTAL_FIRST_RE,
     SECTION_HEADERS,
     SKILL_CATEGORIES,
     TITLE_SPLIT_RE,
@@ -907,6 +908,12 @@ def _first_match(pattern: re.Pattern, text: str) -> Optional[str]:
 
 def _extract_location_from_text(text: str) -> Optional[str]:
     """Retourne la ville si une adresse postale FR est détectée (code postal + ville)."""
+    # Try postal-first format first ("59170 Croix") — more reliable than the
+    # combined regex which can match street names as cities ("Jean Jaurès, 59170").
+    m = POSTAL_FIRST_RE.search(text)
+    if m:
+        city = m.group(2)
+        return city.strip().title() if city else None
     m = POSTAL_CODE_CITY_RE.search(text)
     if m:
         city = m.group(2) or m.group(3)
@@ -916,6 +923,9 @@ def _extract_location_from_text(text: str) -> Optional[str]:
 
 def _extract_postal_code_from_text(text: str) -> Optional[str]:
     """Retourne le code postal à 5 chiffres si une adresse postale FR est détectée."""
+    m = POSTAL_FIRST_RE.search(text)
+    if m:
+        return m.group(1)
     m = POSTAL_CODE_CITY_RE.search(text)
     if m:
         return m.group(1) or m.group(4)

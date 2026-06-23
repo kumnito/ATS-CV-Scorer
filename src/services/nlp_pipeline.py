@@ -10,6 +10,7 @@ from src.core.lexicons import (
     JOB_TITLE_RE,
     LOCATION_BLOCKLIST,
     POSTAL_CODE_CITY_RE,
+    POSTAL_FIRST_RE,
     PROPER_NOUN_RUN_RE,
     SECTION_HEADERS,
     SECTOR_KEYWORDS,
@@ -18,6 +19,13 @@ from src.core.lexicons import (
     PERSON_NAME_RE,
 )
 from src.core.schemas import NormalizedCV
+
+STREET_TOKENS: frozenset[str] = frozenset({
+    "rue", "avenue", "boulevard", "impasse", "allée", "chemin",
+    "route", "place", "square", "passage", "voie", "résidence",
+    "villa", "cité", "hameau", "lotissement", "lieu-dit",
+    "jaurès", "jauress",
+})
 
 
 class NLPPipeline:
@@ -54,8 +62,14 @@ class NLPPipeline:
             or (normalized_cv.experience[0].title if normalized_cv.experience else None)
             or _extract_job_title(sections.get("header", ""))
         )
-        location = normalized_cv.header.location or _extract_location(sections.get("header", ""), entities)
-        postal_code = normalized_cv.header.postal_code
+        location, postal_code = _cascade_location(
+            normalized_cv.raw_text,
+            job_title or "",
+            sections.get("header", ""),
+            entities,
+            normalized_cv.header.location,
+            normalized_cv.header.postal_code,
+        )
         sector = _extract_sector(normalized_cv)
 
         return normalized_cv.model_copy(update={
@@ -168,6 +182,56 @@ def _extract_job_title(header_text: str) -> Optional[str]:
     return None
 
 
+def _has_street_token(candidate: str) -> bool:
+    """Return True if candidate contains a French street-type token."""
+    tokens = set(re.split(r"[\s\-]+", candidate.lower()))
+    return bool(STREET_TOKENS & tokens)
+
+
+def _cascade_location(
+    raw_text: str,
+    job_title: str,
+    header_text: str,
+    entities: dict[str, list[str]],
+    structured_location: Optional[str],
+    structured_postal: Optional[str],
+) -> tuple[Optional[str], Optional[str]]:
+    """Extract (location, postal_code) using a 4-level priority cascade."""
+    if structured_location:
+        return structured_location, structured_postal
+
+    # Priority 1 — postal-first regex on full raw text ("59170 Croix").
+    # Tried before the combined POSTAL_CODE_CITY_RE because the city-first
+    # alternative can consume a street name as the "city"
+    # (e.g. "Jean Jaurès, 59170" matches before "59170 Croix").
+    for m in POSTAL_FIRST_RE.finditer(raw_text):
+        city, pc = m.group(2), m.group(1)
+        if city and not _has_street_token(city):
+            return city.strip().title(), structured_postal or pc
+
+    # Priority 1b — city-first regex on full raw text ("Croix, 59170")
+    for m in POSTAL_CODE_CITY_RE.finditer(raw_text):
+        if m.group(3):  # city-first match only
+            city, pc = m.group(3), m.group(4)
+            if city and not _has_street_token(city):
+                return city.strip().title(), structured_postal or pc
+
+    # Priority 2 — postal-first regex on noisy job_title field
+    if job_title:
+        for m in POSTAL_FIRST_RE.finditer(job_title):
+            city, pc = m.group(2), m.group(1)
+            if city and not _has_street_token(city):
+                return city.strip().title(), structured_postal or pc
+        for m in POSTAL_CODE_CITY_RE.finditer(job_title):
+            if m.group(3):
+                city, pc = m.group(3), m.group(4)
+                if city and not _has_street_token(city):
+                    return city.strip().title(), structured_postal or pc
+
+    # Priority 3 & 4 — NER with LOCATION_BLOCKLIST + street filter
+    return _extract_location(header_text, entities), structured_postal
+
+
 def _clean_location_candidate(raw: str) -> Optional[str]:
     runs = PROPER_NOUN_RUN_RE.findall(raw)
     if not runs:
@@ -191,6 +255,7 @@ def _extract_location(
                     _clean_location_candidate(loc)
                     for loc in entities.get("locations", [])
                     if loc.lower().strip() not in LOCATION_BLOCKLIST
+                    and not _has_street_token(loc)
                 ),
             )
         )

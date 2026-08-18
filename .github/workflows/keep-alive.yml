@@ -1,0 +1,42 @@
+name: Keep HF Space Alive
+
+on:
+  schedule:
+    # Toutes les 6h — largement sous la limite de 48h d'inactivité HF Spaces
+    - cron: "0 */6 * * *"
+  workflow_dispatch: {}  # déclenchement manuel depuis l'onglet Actions
+
+permissions:
+  contents: read
+
+jobs:
+  ping-space:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping HF Space
+        id: ping
+        run: |
+          # app.py fait un demo.launch() Gradio pur : pas de /health monté
+          # sur le Space (celui de src/api/server.py n'est pas déployé).
+          URL="https://voroman-ats-cv-scorer.hf.space/"
+          echo "Pinging $URL ..."
+          HTTP_CODE=$(curl -sS -o /dev/null -w "%{http_code}" \
+            --max-time 60 \
+            --retry 3 \
+            --retry-delay 10 \
+            --retry-all-errors \
+            "$URL")
+          echo "HTTP status: $HTTP_CODE"
+          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 400 ]; then
+            echo "status=success" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=failure" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+      - name: Log result
+        if: always()
+        run: |
+          echo "Ping terminé à $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "Résultat : ${{ steps.ping.outputs.status }}"

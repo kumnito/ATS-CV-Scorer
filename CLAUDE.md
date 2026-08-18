@@ -15,7 +15,7 @@ feedback IA Claude. Déployé sur Hugging Face Spaces.
 | Scoring ATS | `CVQualityScorer` — critères pondérés par profil sectoriel |
 | Feedback IA | Anthropic Claude `claude-sonnet-4-6` · prompt sectoriel · réponse FR |
 | Recherche d'offres | Adzuna (`ADZUNA_ID`/`ADZUNA_API_KEY`) · Jooble · France Travail OAuth2 |
-| API REST | FastAPI v0.3.0 (`src/api/server.py`) — `/score`, `/find-jobs`, `/health` |
+| API REST | FastAPI v0.3.0 (`src/api/server.py`) — `/score`, `/find-jobs`, `/health` — **local uniquement, non déployée sur le Space** |
 | UI | Gradio 4.44 (`app.py`) — 2 onglets, thème Tech Dashboard custom |
 
 ## Structure
@@ -57,6 +57,8 @@ src/
     pipeline_diagram.py    — schéma pipeline animé (HTML/CSS/SVG) + BRIDGE_JS
                              get_pipeline_html() rendu unique · get_stage_signal() canal JS
 app.py                     — UI Gradio (point d'entrée HF Spaces)
+.github/workflows/
+  keep-alive.yml           — cron 6h : ping HTTP du Space (anti mise en veille 48h)
 tests/
   test_*.py                — un fichier par service, mocks httpx.MockTransport
   benchmark_sectoriel.py   — rapport CSV : détection × scoring par CV du corpus
@@ -122,6 +124,8 @@ PDF
 - `/find-jobs` : CVTransformer + NLPPipeline + JobSearchOrchestrator (Adzuna + Jooble) + SemanticScorer.
 - `/health` : `claude_budget_remaining`.
 
+**L'API n'est pas déployée sur HF Spaces.** `app.py` fait un `demo.launch()` Gradio pur (pas de `mount_gradio_app`) : sur le Space, seule `/` répond, et `/health` renvoie 404. Ces trois routes ne sont joignables qu'en local via `make dev` (`http://localhost:8000`).
+
 ## Pitfalls connus
 
 - **`en_core_web_sm` sur texte FR** : NER GPE/LOC produit des faux positifs (noms de langues, noms de rues). Solution : cascade `_cascade_location()` dans `nlp_pipeline.py` : `POSTAL_FIRST_RE` (code-avant-ville) → `POSTAL_CODE_CITY_RE` (ville-avant) → NER filtré (`LOCATION_BLOCKLIST` + `STREET_TOKENS`). Même priorité appliquée dans `cv_transformer._extract_location_from_text()`. **`POSTAL_CODE_CITY_RE` seul ne suffit pas** : il matche "Jean Jaurès, 59170" avant "59170 Croix" — toujours essayer `POSTAL_FIRST_RE` en premier.
@@ -130,6 +134,7 @@ PDF
 - **`job_title` bruité** : le champ peut contenir nom, téléphone, email. Le n-gram windowing (2–4 mots) dans `_compute_title_scores` permet d'extraire "devops engineer" d'une chaîne bruitée.
 - **France Travail OAuth2** : l'application francetravail.io doit être **abonnée** à l'API "Offres d'emploi v2" (souscription distincte de la création de l'app). Sinon : `invalid_client` sur le token endpoint même avec des credentials valides.
 - **`font_mono` Gradio 4.44** : doit être une liste (`[gr.themes.GoogleFont(...)]`), pas un objet nu.
+- **`/health` absent du Space HF** : l'API FastAPI n'est pas montée dans `app.py` (`demo.launch()` seul). Tout ping/monitoring externe doit viser `/`, pas `/health` (404). Cf. `.github/workflows/keep-alive.yml`.
 - **Variables CSS Gradio dark mode** : utiliser `--body-text-color(-subdued)`, `--background-fill-primary/secondary`, `--border-color-primary`. Les noms comme `--color-text-primary` n'existent pas dans cette version.
 
 ## État actuel
@@ -137,6 +142,7 @@ PDF
 - **396 tests, 10 skippés** (PDFs privés `CV_kumnito_two_columns.pdf` et `CV-KEO-PEN.pdf` absents du repo).
 - **Benchmark sectoriel** : détection ≥ 80% sur le corpus de 15 CVs. `make benchmark-sectoriel` génère `tests/fixtures/benchmark_sectoriel.csv`.
 - **Déployé** : HF Spaces `voroman/ats-cv-scorer`, remote `hf`.
+- **Keep-alive HF** : `.github/workflows/keep-alive.yml` — ping de `/` toutes les 6h (le Space `cpu-basic` s'endort après 48h d'inactivité). `workflow_dispatch` pour un ping manuel. Seul workflow du repo — **il n'y a pas de CI GitHub** (tests/lint restent locaux via `make test` / `make lint`). GitHub désactive les workflows `schedule` sur les repos publics après 60 jours sans commit : si le Space s'endort, vérifier d'abord l'onglet Actions.
 - **Pipeline diagram animé** : `src/ui/pipeline_diagram.py` — schéma 7 blocs + connecteurs SVG `stroke-dashoffset` (animation draw 2s/étape). Bridge `MutationObserver` injecté via `head=<script>` pour transitions CSS zero-clignotement. Schéma rendu une seule fois (yield 1), JS mis à jour via `stage_signal_html` caché.
 
 ## Dette technique résiduelle

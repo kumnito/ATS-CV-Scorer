@@ -146,9 +146,10 @@ flowchart TD
 | Scoring ATS adaptatif | `CVQualityScorer` — critères pondérés par profil sectoriel |
 | Feedback IA | Anthropic Claude (`claude-sonnet-4-6`) · prompt sectoriel · réponse FR |
 | Recherche d'offres | `JobSearchOrchestrator` — Adzuna, Jooble, France Travail (OAuth2) |
-| API REST | FastAPI `v0.3.0` — `/score`, `/find-jobs`, `/health` |
+| API REST | FastAPI `v0.3.0` — `/score`, `/find-jobs`, `/health` (local uniquement) |
 | UI | Gradio 4.44 — 2 onglets, thème Tech Dashboard custom, pipeline diagram animé |
 | Déploiement | Hugging Face Spaces (Docker, Python 3.12) |
+| Keep-alive | GitHub Actions — ping cron 6h du Space |
 
 ---
 
@@ -230,6 +231,11 @@ Prompt enrichi avec le contexte sectoriel :
 
 `FastAPI v0.3.0` — démarrage : `make dev` → `http://localhost:8000/docs`
 
+> **L'API n'est pas exposée par la démo HF Spaces.** Le Space lance l'UI Gradio seule
+> (`demo.launch()`, sans `mount_gradio_app`) : `https://voroman-ats-cv-scorer.hf.space/`
+> sert l'interface, et les routes ci-dessous y renvoient `404`. Pour les utiliser,
+> lancer l'API en local.
+
 ### `GET /health`
 
 ```json
@@ -267,6 +273,29 @@ Réponse : `list[RankedJobMatch]` (job + scoring_result, triés par score décro
 - **Session feedback Claude** : max 5 appels par session Gradio.
 - **`VISION_LLM_ENABLED`** : désactivé par défaut (niveau 3 cascade off).
 - **`CLAUDE_CALLS_LIMIT`** : quota global processus — une fois épuisé, le feedback IA est silencieusement désactivé sans casser l'extraction ni la recherche.
+
+---
+
+## Keep-alive de la démo
+
+Le Space tourne sur le hardware gratuit `cpu-basic`, mis en veille après **48h
+d'inactivité** — un visiteur tombe alors sur un cold start de plusieurs dizaines de
+secondes. `.github/workflows/keep-alive.yml` le maintient éveillé :
+
+- **`schedule`** : ping HTTP de `https://voroman-ats-cv-scorer.hf.space/` toutes les 6h
+  (4/jour, large marge sous les 48h même si GitHub retarde un cron).
+- **`workflow_dispatch`** : ping manuel depuis l'onglet *Actions*, utile avant une démo.
+- **Aucun secret** : l'URL du Space est publique, le ping n'est pas authentifié.
+- La racine `/` est ciblée et non `/health` — cf. l'avertissement de la section API REST.
+- `curl --max-time 60 --retry 3 --retry-all-errors` : couvre le cold start (chargement
+  MiniLM + spaCy + embeddings des 134 profils). `--retry` seul ne rejoue pas les
+  timeouts de connexion, d'où `--retry-all-errors`.
+
+> GitHub désactive automatiquement les workflows `schedule` sur les dépôts publics après
+> **60 jours sans commit**. Si le Space s'endort malgré tout, vérifier d'abord que le
+> workflow n'a pas été suspendu pour inactivité.
+
+C'est le seul workflow du dépôt : les tests et le lint restent locaux (`make test`, `make lint`).
 
 ---
 

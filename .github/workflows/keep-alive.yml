@@ -20,15 +20,22 @@ jobs:
           # app.py fait un demo.launch() Gradio pur : pas de /health monté
           # sur le Space (celui de src/api/server.py n'est pas déployé).
           URL="https://voroman-ats-cv-scorer.hf.space/"
+          # Fichier réel plutôt que /dev/null : curl tronque la sortie avant
+          # chaque retry, et ftruncate(/dev/null) échoue → exit 23.
+          TMPFILE=$(mktemp)
+          trap 'rm -f "$TMPFILE"' EXIT
           echo "Pinging $URL ..."
-          HTTP_CODE=$(curl -sS -o /dev/null -w "%{http_code}" \
+          # Le shell Actions tourne en `bash -e` : sans `||`, un échec de curl
+          # arrêterait le step avant le log.
+          CURL_EXIT=0
+          HTTP_CODE=$(curl -sS -o "$TMPFILE" -w "%{http_code}" \
             --max-time 60 \
             --retry 3 \
             --retry-delay 10 \
             --retry-all-errors \
-            "$URL")
-          echo "HTTP status: $HTTP_CODE"
-          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 400 ]; then
+            "$URL") || CURL_EXIT=$?
+          echo "HTTP status: $HTTP_CODE (curl exit: $CURL_EXIT)"
+          if [ "$CURL_EXIT" -eq 0 ] && [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 400 ]; then
             echo "status=success" >> "$GITHUB_OUTPUT"
           else
             echo "status=failure" >> "$GITHUB_OUTPUT"
